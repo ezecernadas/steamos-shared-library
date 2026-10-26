@@ -3,6 +3,7 @@ name = "steamshare"
 version = "0.1.0"
 description = "Share one NTFS Steam library between Windows and SteamOS"
 readme = "README.md"
+license = "GPL-3.0-or-later"
 requires-python = ">=3.11"
 # Runtime must stay dependency-free: SteamOS has a read-only root (CONTRIBUTING.md, rule 1).
 dependencies = []
