@@ -1,0 +1,49 @@
+# Runs on every push and pull request. See CONTRIBUTING.md for the rules it enforces.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Lint and unit tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # The lowest supported version (pyproject.toml) and the newest ones.
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest
+
+  integration:
+    name: Integration tests on a real NTFS mount
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked
+      - name: Install mkntfs
+        run: sudo apt-get update && sudo apt-get install --yes ntfs-3g
+      - name: Load the ntfs3 module
+        # The runner's Azure kernel may keep ntfs3 in the extra modules package.
+        run: |
+          sudo modprobe ntfs3 || {
+            sudo apt-get install --yes "linux-modules-extra-$(uname -r)"
+            sudo modprobe ntfs3
+          }
+      - name: Run the integration tests as root (they mount filesystems)
+        run: sudo .venv/bin/python -m pytest tests/integration -v
