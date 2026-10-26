@@ -8,19 +8,21 @@ for, now done as root on the desktop user's behalf.
 
 import subprocess
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 import pytest
 
 from steamshare.adapters.invoking_user import InvokingUser
 from steamshare.cli.install_choices import InstallError
+from steamshare.cli.run_report import UNICODE_SYMBOLS, ClosingNotes, RunReport
 from steamshare.cli.watch_service_setup import (
     WatchServicePlan,
     WatchServiceSkipped,
     apply_watch_service,
-    format_watch_summary,
     plan_watch_service,
     preview_watch_service,
+    watch_summary_field,
 )
 
 UNIT_NAME = "steamshare-watch.service"
@@ -63,12 +65,20 @@ class Setup:
             launcher=self.launcher,
         )
 
-    def apply(self, *, tool: str = "proton_experimental") -> None:
-        apply_watch_service(
+    def report(self, *, dry_run: bool) -> RunReport:
+        return RunReport(symbols=UNICODE_SYMBOLS, home=self.user.home, dry_run=dry_run)
+
+    def apply(self, *, tool: str = "proton_experimental") -> ClosingNotes:
+        return apply_watch_service(
             self.plan(tool=tool),
             change_owner=self._change_owner,
             run_command=self._run,
+            report=self.report(dry_run=False),
+            now=datetime(2026, 10, 26, 18, 31, 31),
         )
+
+    def preview(self) -> ClosingNotes:
+        return preview_watch_service(self.plan(), self.report(dry_run=True))
 
     def _change_owner(self, path: Path, user_id: int, group_id: int) -> None:
         assert (user_id, group_id) == (1000, 1000)
@@ -145,36 +155,36 @@ def test_a_missing_launcher_is_an_error_that_names_the_way_out(setup: Setup) -> 
 # --- Summary and dry run -----------------------------------------------------
 
 
-def test_the_summary_names_the_service_and_the_debugger_flag(setup: Setup) -> None:
-    lines = format_watch_summary(setup.plan())
-
-    text = "\n".join(lines)
-    assert str(setup.unit_file) in text
-    assert "player" in text
-    assert str(setup.flag_file) in text
+def test_the_summary_names_the_user_the_service_runs_for(setup: Setup) -> None:
+    assert watch_summary_field(setup.plan()) == ("Watch service", "for user player")
 
 
 def test_the_summary_says_when_the_watch_part_is_skipped(setup: Setup) -> None:
-    lines = format_watch_summary(setup.plan(skip=True))
-
-    assert any("skipped" in line for line in lines)
+    assert watch_summary_field(setup.plan(skip=True)) == (
+        "Watch service",
+        "skipped (--no-watch was given)",
+    )
 
 
 def test_a_dry_run_prints_the_plan_and_changes_nothing(
     setup: Setup, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    preview_watch_service(setup.plan())
+    setup.preview()
 
     assert not setup.flag_file.exists()
     assert not setup.unit_file.parent.exists()
     output = capsys.readouterr().out
-    assert f"would create: {setup.flag_file}" in output
-    assert f"would create: {setup.unit_file}" in output
     assert "Restart=on-failure" in output
-    assert (
-        "would run: systemctl --user --machine=player@ enable --now steamshare-watch.service"
-    ) in output
-    assert "would run: systemctl --user --machine=player@ restart" not in output
+    section = output[output.index("Watch service  (~/.config/systemd/user)") :].splitlines()
+    assert section == [
+        "Watch service  (~/.config/systemd/user)",
+        "  · would create  Steam debugger flag (~/.steam/steam/.cef-enable-remote-debugging)",
+        "  · would create  steamshare-watch.service",
+        "  · would run     systemctl --user --machine=player@ daemon-reload",
+        "  · would run     systemctl --user --machine=player@ enable --now "
+        "steamshare-watch.service",
+        "",
+    ]
 
 
 def test_a_dry_run_over_an_older_service_plans_a_restart(
@@ -183,13 +193,23 @@ def test_a_dry_run_over_an_older_service_plans_a_restart(
     setup.unit_file.parent.mkdir(parents=True)
     setup.unit_file.write_text("ExecStart=/old/.venv/bin/python -m steamshare watch\n")
 
-    preview_watch_service(setup.plan())
+    notes = setup.preview()
 
     output = capsys.readouterr().out
-    assert f"would update (old file backed up first): {setup.unit_file}" in output
-    assert "would run: systemctl --user --machine=player@ restart steamshare-watch.service" in (
+    assert "  · would update  steamshare-watch.service" in output
+    assert "would run     systemctl --user --machine=player@ restart steamshare-watch.service" in (
         output
     )
+    assert [outcome.path for outcome in notes.unit_outcomes] == [setup.unit_file]
+
+
+def test_a_dry_run_leaves_the_same_next_steps_as_a_real_run(setup: Setup) -> None:
+    planned = setup.preview()
+
+    done = setup.apply()
+
+    assert planned.next_steps == done.next_steps
+    assert planned.tips == done.tips
 
 
 # --- Applying ----------------------------------------------------------------
@@ -198,7 +218,7 @@ def test_a_dry_run_over_an_older_service_plans_a_restart(
 def test_turns_on_the_debugger_writes_the_service_and_starts_it_for_the_user(
     setup: Setup, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    setup.apply()
+    notes = setup.apply()
 
     assert setup.flag_file.read_text() == ""
     assert "--library /mnt/steamlib/SteamLibrary" in setup.unit_file.read_text()
@@ -208,10 +228,16 @@ def test_turns_on_the_debugger_writes_the_service_and_starts_it_for_the_user(
         [*USER_SYSTEMCTL, "daemon-reload"],
         [*USER_SYSTEMCTL, "enable", "--now", UNIT_NAME],
     ]
-    output = capsys.readouterr().out
-    assert "Restart Steam once" in output
-    assert "Make default" in output
-    assert "journalctl --user -u steamshare-watch.service" in output
+    assert capsys.readouterr().out.splitlines() == [
+        "Watch service  (~/.config/systemd/user)",
+        "  ✓ created    Steam debugger flag (~/.steam/steam/.cef-enable-remote-debugging)",
+        "  ✓ created    steamshare-watch.service",
+        "  ✓ running    for player",
+        "",
+    ]
+    assert notes.next_steps[0].startswith("Restart Steam once (Steam → Exit")
+    assert "Make default" in notes.next_steps[1]
+    assert notes.tips == (("Follow watch", "journalctl --user -u steamshare-watch.service -f"),)
 
 
 def test_a_second_run_changes_nothing_restarts_nothing_and_needs_no_steam_restart(
@@ -221,11 +247,10 @@ def test_a_second_run_changes_nothing_restarts_nothing_and_needs_no_steam_restar
     setup.commands.clear()
     capsys.readouterr()
 
-    setup.apply()
+    notes = setup.apply()
 
-    output = capsys.readouterr().out
-    assert output.count("unchanged") == 2
-    assert "Restart Steam" not in output
+    assert capsys.readouterr().out.count("unchanged") == 2
+    assert not any("Restart Steam" in step for step in notes.next_steps)
     assert [*USER_SYSTEMCTL, "restart", UNIT_NAME] not in setup.commands
 
 
@@ -233,10 +258,13 @@ def test_a_changed_service_is_backed_up_rewritten_and_restarted(setup: Setup) ->
     setup.apply()
     setup.commands.clear()
 
-    setup.apply(tool="proton_9")
+    notes = setup.apply(tool="proton_9")
 
     backups = [path.name for path in setup.unit_file.parent.iterdir() if ".bak-" in path.name]
-    assert len(backups) == 1
+    assert backups == [f"{UNIT_NAME}.bak-20261026-183131"]
+    assert [outcome.backup for outcome in notes.unit_outcomes] == [
+        setup.unit_file.parent / backups[0]
+    ]
     assert "--tool proton_9" in setup.unit_file.read_text()
     # enable --now leaves a running service on its old command line.
     assert setup.commands[-1] == [*USER_SYSTEMCTL, "restart", UNIT_NAME]
@@ -247,13 +275,13 @@ def test_a_skipped_watch_part_says_why_and_what_to_do(
 ) -> None:
     setup.steam_root.rmdir()
 
-    setup.apply()
+    notes = setup.apply()
 
     assert setup.commands == []
     assert not setup.unit_file.exists()
     output = capsys.readouterr().out
-    assert "skipped" in output
-    assert "run Steam once" in output
+    assert "  ! skipped    Steam has never run for player" in output
+    assert "run Steam once as player" in notes.next_steps[0]
 
 
 def test_a_failed_systemctl_says_how_to_see_why(setup: Setup) -> None:

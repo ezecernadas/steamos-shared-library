@@ -113,9 +113,10 @@ def _choose_partition(
             "from Windows (Disk Management, formatted as NTFS), then run install again."
         )
     facts_list = [discovery.probe_partition(partition) for partition in partitions]
-    console.show("NTFS partitions found:")
+    console.show("NTFS partitions")
     for line in format_partition_list(facts_list):
         console.show(line)
+    console.show("")
     return _pick_partition(facts_list, arguments.yes, console)
 
 
@@ -194,7 +195,7 @@ def _choose_library_folder(
             "such as --library-folder SteamLibrary."
         )
     if len(found) == 1:
-        console.show(f"Using the Steam library in {found[0]}/ on {device}.")
+        # Taken without a word: the summary shown next names it.
         return found[0], False
     return _pick_library_folder(found, device, arguments.yes, console), False
 
@@ -219,28 +220,29 @@ def _pick_library_folder(
 # --- Confirmation ------------------------------------------------------------
 
 
-def format_summary(
-    choices: InstallChoices,
-    mount_point: PurePosixPath,
-    unit_names: Sequence[str],
-) -> list[str]:
-    """Return the lines that sum up what install is about to set up."""
+def summary_fields(choices: InstallChoices, mount_point: PurePosixPath) -> list[tuple[str, str]]:
+    """Return the summary's (label, value) pairs for the mounts install is about to set up.
+
+    The UUID stays in it: scripts pass it back with --partition-uuid.
+    """
     partition = choices.partition
     if partition is None:
-        partition_line = str(partition_device(choices.partition_uuid))
+        # Only the UUID is known, and the device path already shows it.
+        partition_value = str(partition_device(choices.partition_uuid))
     else:
-        details = ", ".join(filter(None, [partition.label, format_size(partition.size_bytes)]))
-        partition_line = f"{partition.device} ({details})"
-    library_line = str(mount_point / choices.library_folder)
+        details = [
+            partition.label,
+            format_size(partition.size_bytes),
+            f"UUID {choices.partition_uuid}",
+        ]
+        partition_value = f"{partition.device}  ({', '.join(filter(None, details))})"
+    library_value = str(mount_point / choices.library_folder)
     if choices.create_library_folder:
-        library_line += " (created after mounting, if missing)"
+        library_value += "  (created after mounting, if missing)"
     return [
-        "Install summary:",
-        f"  Partition:      {partition_line}",
-        f"  UUID:           {choices.partition_uuid}",
-        f"  Mount point:    {mount_point}",
-        f"  Library folder: {library_line}",
-        f"  Units:          {', '.join(unit_names)}",
+        ("Partition", partition_value),
+        ("Mounted at", str(mount_point)),
+        ("Library", library_value),
     ]
 
 
@@ -260,6 +262,9 @@ def confirm_install(
 
 # --- Asking ------------------------------------------------------------------
 
+# Shown after an accepted answer, so the question stands apart from what follows.
+ANSWERED_SEPARATOR = ""
+
 
 def _ask_numbered(console: Console, question: str, option_count: int, default: int | None) -> int:
     default_hint = f" [{default + 1}]" if default is not None else ""
@@ -267,6 +272,7 @@ def _ask_numbered(console: Console, question: str, option_count: int, default: i
         answer = _ask(console, f"{question}{default_hint}: ")
         position = parse_numbered_choice(answer, option_count=option_count, default=default)
         if position is not None:
+            console.show(ANSWERED_SEPARATOR)
             return position
         console.show(f"Please answer a number from 1 to {option_count}.")
 
@@ -276,6 +282,7 @@ def _ask_yes_no(console: Console, question: str, *, default: bool) -> bool:
     while True:
         answer = parse_yes_no(_ask(console, f"{question} {options}: "), default=default)
         if answer is not None:
+            console.show(ANSWERED_SEPARATOR)
             return answer
         console.show("Please answer y or n.")
 

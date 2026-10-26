@@ -24,6 +24,7 @@ from steamshare.cli.install import (
     install,
 )
 from steamshare.cli.install_choices import Discovery
+from steamshare.cli.run_report import UNICODE_SYMBOLS
 from steamshare.cli.shared import absolute_path, relative_folder
 from steamshare.core.ntfs_partitions import (
     NtfsPartition,
@@ -96,6 +97,7 @@ class FakeSystem:
             console=Console(ask=self._ask, show=print, is_interactive=self.interactive),
             launcher=self.launcher,
             run_command=self._run_user_command,
+            symbols=UNICODE_SYMBOLS,
         )
 
     @property
@@ -255,6 +257,106 @@ def test_reports_a_systemctl_failure_with_the_next_step(
     assert "systemctl status mnt-steamlib.mount" in error
 
 
+# --- The whole report --------------------------------------------------------
+
+
+def test_a_first_install_reports_each_section_once_and_ends_with_the_next_steps(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = FakeSystem(tmp_path)
+    system.steam_root.mkdir(parents=True)
+
+    install(make_arguments(partition_uuid=None, library_folder=None, yes=True), system.build())
+
+    assert capsys.readouterr().out.splitlines() == [
+        "NTFS partitions",
+        "  1) /dev/nvme0n1p3  179 GB            Windows system partition (not recommended)",
+        "  2) /dev/nvme0n1p4   96 GB  SteamLib  Steam library in SteamLibrary/",
+        "",
+        "Summary",
+        "  Partition      /dev/nvme0n1p4  (SteamLib, 96 GB, UUID 1111AAAA2222BBBB)",
+        "  Mounted at     /mnt/steamlib",
+        "  Library        /mnt/steamlib/SteamLibrary",
+        "  Watch service  for user player",
+        "",
+        f"Mounts  ({system.unit_directory})",
+        "  ✓ created    steamshare-ntfs3.service",
+        "  ✓ created    mnt-steamlib.mount",
+        "  ✓ created    mnt-steamlib-SteamLibrary-steamapps-compatdata.mount",
+        "  ✓ created    mnt-steamlib-SteamLibrary-steamapps-shadercache.mount",
+        "  ✓ created    ~/.local/share/steam-shared/compatdata",
+        "  ✓ created    ~/.local/share/steam-shared/shadercache",
+        "  ✓ started    3 mounts",
+        "",
+        "Watch service  (~/.config/systemd/user)",
+        "  ✓ created    Steam debugger flag (~/.steam/steam/.cef-enable-remote-debugging)",
+        "  ✓ created    steamshare-watch.service",
+        "  ✓ running    for player",
+        "",
+        "Done. Next steps:",
+        "  1. Restart Steam once (Steam → Exit, then start it again) so it turns its debugger "
+        "on. Until then, watch waits for it.",
+        "  2. In Steam: Settings → Storage → the shared library → Make default, so a click on "
+        "Install puts games there and fetches their Windows build.",
+        "  3. Check the setup, without sudo:  ./steamshare doctor --library "
+        "/mnt/steamlib/SteamLibrary",
+        "  Follow watch:  journalctl --user -u steamshare-watch.service -f",
+    ]
+
+
+def test_replaced_files_are_summed_up_in_one_backup_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = FakeSystem(tmp_path)
+    system.steam_root.mkdir(parents=True)
+    install(make_arguments(), system.build())
+    (system.unit_directory / "mnt-steamlib.mount").write_text("old\n")
+    system.watch_unit.write_text("old\n")
+    capsys.readouterr()
+
+    install(make_arguments(), system.build())
+
+    output = capsys.readouterr().out
+    assert "  ✓ updated    mnt-steamlib.mount\n" in output
+    assert "  ✓ updated    steamshare-watch.service\n" in output
+    [backup] = (system.unit_directory).glob("mnt-steamlib.mount.bak-*")
+    timestamp = backup.name.rpartition(".bak-")[2]
+    # One run, one timestamp: the units and the watch service share it.
+    assert (system.watch_unit.parent / f"steamshare-watch.service.bak-{timestamp}").exists()
+    assert f"Replaced files were backed up next to themselves (*.bak-{timestamp}).\n" in output
+
+
+def test_a_dry_run_reports_the_same_sections_with_would_verbs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = FakeSystem(tmp_path, is_root=False)
+    system.steam_root.mkdir(parents=True)
+
+    install(make_arguments(dry_run=True), system.build())
+
+    output = capsys.readouterr().out
+    mounts = output[output.index(f"Mounts  ({system.unit_directory})") :]
+    assert mounts.splitlines()[:11] == [
+        f"Mounts  ({system.unit_directory})",
+        "  · would create  steamshare-ntfs3.service",
+        "  · would create  mnt-steamlib.mount",
+        "  · would create  mnt-steamlib-SteamLibrary-steamapps-compatdata.mount",
+        "  · would create  mnt-steamlib-SteamLibrary-steamapps-shadercache.mount",
+        "  · would create  ~/.local/share/steam-shared/compatdata",
+        "  · would create  ~/.local/share/steam-shared/shadercache",
+        "  · would run     systemctl daemon-reload",
+        "  · would run     systemctl enable --now mnt-steamlib.mount "
+        "mnt-steamlib-SteamLibrary-steamapps-compatdata.mount "
+        "mnt-steamlib-SteamLibrary-steamapps-shadercache.mount",
+        "",
+        "--- ~/.config/systemd/user/steamshare-watch.service",
+    ]
+    assert "Watch service  (~/.config/systemd/user)" in output
+    closing = output.split("Nothing was changed. After a real install, the next steps are:\n")
+    assert closing[1].splitlines()[1].startswith("  2. In Steam: Settings → Storage")
+    assert "Done." not in output
+
+
 # --- Choosing interactively --------------------------------------------------
 
 
@@ -271,9 +373,8 @@ def test_without_flags_asks_for_the_partition_and_confirms(
     assert system.prompts == ["Which partition holds the shared library? [2]: ", "Proceed? [Y/n]: "]
     assert system.enabled == [EXPECTED_UNITS[1:]]
     output = capsys.readouterr().out
-    assert "  Partition:      /dev/nvme0n1p4 (SteamLib, 96 GB)" in output
-    assert "  UUID:           1111AAAA2222BBBB" in output
-    assert "  Library folder: /mnt/steamlib/SteamLibrary" in output
+    assert "  Partition      /dev/nvme0n1p4  (SteamLib, 96 GB, UUID 1111AAAA2222BBBB)" in output
+    assert "  Library        /mnt/steamlib/SteamLibrary" in output
 
 
 def test_declining_the_confirmation_writes_nothing(
@@ -339,7 +440,7 @@ def test_a_named_folder_that_is_not_a_library_is_created_after_mounting(
     assert exit_code == EXIT_OK
     assert (mount_point / "Games").is_dir()
     assert system.events[-2:] == ["enable", "own Games"]
-    assert f"created: {mount_point / 'Games'}" in capsys.readouterr().out
+    assert f"  ✓ created    {mount_point / 'Games'}" in capsys.readouterr().out
 
 
 def test_dry_run_says_the_named_folder_would_be_created(
@@ -353,7 +454,7 @@ def test_dry_run_says_the_named_folder_would_be_created(
     )
 
     output = capsys.readouterr().out
-    assert "would create after mounting, if missing: /mnt/steamlib/Games" in output
+    assert "  · would create  /mnt/steamlib/Games  (after mounting, if missing)" in output
 
 
 def test_without_root_the_hint_repeats_only_the_flags_given(
@@ -386,8 +487,12 @@ def test_with_steam_installed_the_watch_service_is_set_up_after_the_mounts(
     assert system.user_commands[0][:3] == ["systemctl", "--user", "--machine=player@"]
     assert f"ExecStart={system.launcher} watch" in system.watch_unit.read_text()
     assert (system.steam_root / ".cef-enable-remote-debugging").exists()
-    output = capsys.readouterr().out
-    assert output.rstrip().splitlines()[-1].startswith("Next step:")
+    closing = capsys.readouterr().out.split("Done. Next steps:\n")[1].splitlines()
+    assert closing[-2] == (
+        "  3. Check the setup, without sudo:  ./steamshare doctor --library "
+        "/mnt/steamlib/SteamLibrary"
+    )
+    assert closing[-1] == "  Follow watch:  journalctl --user -u steamshare-watch.service -f"
 
 
 def test_the_summary_shows_the_watch_part_before_asking(
@@ -402,9 +507,7 @@ def test_the_summary_shows_the_watch_part_before_asking(
 
     assert exit_code == EXIT_FAILURE
     assert not system.watch_unit.exists()
-    output = capsys.readouterr().out
-    assert f"  Watch service:  {system.watch_unit} (user player)" in output
-    assert output.index("Watch service:") < output.index("Steam debugger:")
+    assert "  Watch service  for user player" in capsys.readouterr().out
 
 
 def test_without_steam_the_mounts_are_installed_and_the_watch_part_says_what_to_do(
@@ -418,7 +521,7 @@ def test_without_steam_the_mounts_are_installed_and_the_watch_part_says_what_to_
     assert system.enabled == [EXPECTED_UNITS[1:]]
     assert system.user_commands == []
     output = capsys.readouterr().out
-    assert "Watch service skipped: Steam has never run for player" in output
+    assert "  ! skipped    Steam has never run for player" in output
     assert "run Steam once as player, then run `sudo ./steamshare install` again" in output
 
 
@@ -433,7 +536,7 @@ def test_no_watch_installs_only_the_mounts(
     assert exit_code == EXIT_OK
     assert system.user_commands == []
     assert not system.watch_unit.exists()
-    assert "Watch service:  skipped (--no-watch was given)" in capsys.readouterr().out
+    assert "  Watch service  skipped (--no-watch was given)" in capsys.readouterr().out
 
 
 def test_dry_run_shows_the_watch_service_running_the_launcher(

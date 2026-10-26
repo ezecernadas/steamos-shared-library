@@ -18,6 +18,7 @@ from steamshare.cli.install_choices import (
     InstallError,
     confirm_install,
     resolve_choices,
+    summary_fields,
 )
 from steamshare.core.ntfs_partitions import (
     NtfsPartition,
@@ -104,9 +105,22 @@ def test_lists_the_partitions_and_enter_takes_the_suggested_one() -> None:
 
     assert choices.partition_uuid == "D8E6"
     assert choices.library_folder == "SteamLibrary"
-    assert "NTFS partitions found:" in console.shown
-    assert "  2) /dev/nvme0n1p4   96 GB  SteamLib  Steam library in SteamLibrary/" in console.shown
+    assert console.shown[:5] == [
+        "NTFS partitions",
+        "  1) /dev/nvme0n1p3  179 GB            Windows system partition (not recommended)",
+        "  2) /dev/nvme0n1p4   96 GB  SteamLib  Steam library in SteamLibrary/",
+        "  3) /dev/nvme0n1p5  930 MB            Windows recovery partition (not recommended)",
+        "",
+    ]
     assert console.prompts[0] == "Which partition holds the shared library? [2]: "
+
+
+def test_an_accepted_answer_is_followed_by_a_blank_line() -> None:
+    console = ScriptedConsole(["9", "2"])
+
+    resolve(console)
+
+    assert console.shown[-2:] == ["Please answer a number from 1 to 3.", ""]
 
 
 def test_asks_again_after_an_invalid_answer() -> None:
@@ -175,7 +189,7 @@ def test_without_a_terminal_prints_the_list_and_names_the_flags() -> None:
     assert "--library-folder" in message
     assert "--yes" in message
     assert "/dev/nvme0n1p4  D8E6" in message
-    assert "NTFS partitions found:" in console.shown
+    assert "NTFS partitions" in console.shown
     assert console.prompts == []
 
 
@@ -192,7 +206,7 @@ def test_a_partition_uuid_flag_skips_the_question_and_looks_only_at_that_one() -
 
     assert choices.library_folder == "SteamLibrary"
     assert probed == [LIBRARY]
-    assert "NTFS partitions found:" not in console.shown
+    assert "NTFS partitions" not in console.shown
 
 
 def test_an_unknown_partition_uuid_says_how_to_find_the_right_one() -> None:
@@ -236,13 +250,16 @@ def test_a_partition_without_uuid_cannot_be_mounted_at_boot() -> None:
 # --- Library folder ----------------------------------------------------------
 
 
-def test_the_only_library_on_the_partition_is_used_and_announced() -> None:
+def test_the_only_library_on_the_partition_is_used_without_a_question() -> None:
+    # Not announced either: the summary shown next names the library.
     console = ScriptedConsole([""])
 
     choices = resolve(console)
 
+    assert choices.library_folder == "SteamLibrary"
     assert choices.create_library_folder is False
-    assert "Using the Steam library in SteamLibrary/ on /dev/nvme0n1p4." in console.shown
+    assert len(console.prompts) == 1
+    assert not any("Using the Steam library" in line for line in console.shown)
 
 
 def test_several_libraries_are_listed_and_asked_for() -> None:
@@ -348,3 +365,32 @@ def test_does_not_ask_with_yes_in_a_dry_run_or_without_a_terminal(
 
     assert console.prompts == []
     assert SUMMARY[0] in console.shown
+
+
+# --- Summary -----------------------------------------------------------------
+
+
+def test_the_summary_names_the_partition_with_its_uuid_and_the_library() -> None:
+    fields = summary_fields(CHOICES, PurePosixPath("/mnt/steamlib"))
+
+    assert fields == [
+        ("Partition", "/dev/nvme0n1p4  (SteamLib, 96 GB, UUID D8E6)"),
+        ("Mounted at", "/mnt/steamlib"),
+        ("Library", "/mnt/steamlib/SteamLibrary"),
+    ]
+
+
+def test_with_both_flags_the_summary_shows_the_partition_by_uuid() -> None:
+    choices = InstallChoices("D8E6", "SteamLibrary", create_library_folder=False, partition=None)
+
+    [partition, *_] = summary_fields(choices, PurePosixPath("/mnt/steamlib"))
+
+    assert partition == ("Partition", "/dev/disk/by-uuid/D8E6")
+
+
+def test_the_summary_says_a_missing_library_folder_is_created() -> None:
+    choices = InstallChoices("D8E6", "Games", create_library_folder=True, partition=LIBRARY)
+
+    fields = dict(summary_fields(choices, PurePosixPath("/mnt/steamlib")))
+
+    assert fields["Library"] == "/mnt/steamlib/Games  (created after mounting, if missing)"

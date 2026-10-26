@@ -6,8 +6,10 @@ see `install_choices`), writes the units from `core.systemd_units` into
 the mounts. Then, unless `--no-watch` is given, it sets up the `watch` user
 service for the desktop user who ran sudo (see `watch_service_setup`).
 
-The summary shown before asking to proceed covers both parts. Every effect
-on the machine goes through `System`, so the wiring below is tested without
+The summary shown before asking to proceed covers both parts. What happens
+is then reported in one section per part, laid out by `run_report`, and the
+report ends with the backups and the numbered next steps. Every effect on
+the machine goes through `System`, so the wiring below is tested without
 root and without touching the machine.
 """
 
@@ -19,6 +21,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from steamshare.adapters.block_devices import read_ntfs_partitions
@@ -36,6 +39,7 @@ from steamshare.adapters.systemctl import (
 from steamshare.adapters.unit_installer import (
     SYSTEM_UNIT_DIRECTORY,
     DirectoryOutcome,
+    FileAction,
     create_owned_directories,
     install_unit_files,
 )
@@ -44,26 +48,36 @@ from steamshare.cli.install_choices import (
     InstallChoices,
     InstallError,
     confirm_install,
-    format_summary,
     missing_partition_error,
     resolve_choices,
+    summary_fields,
+)
+from steamshare.cli.run_report import (
+    PLANNED_FILE_WORDS,
+    STARTED_WORD,
+    WOULD_RUN_WORD,
+    ClosingNotes,
+    RunReport,
+    Symbols,
+    aligned_fields,
+    choose_symbols,
+    combine_notes,
+    format_closing,
+    section_header,
 )
 from steamshare.cli.shared import (
-    DONE_ACTION_LABELS,
     LAUNCHER_COMMAND,
-    PLANNED_ACTION_LABELS,
     ROOT_USER_ID,
     SUDO_INSTALL_COMMAND,
     absolute_path,
-    format_outcome,
     relative_folder,
 )
 from steamshare.cli.watch_service_setup import (
     NO_WATCH_FLAG,
     apply_watch_service,
-    format_watch_summary,
     plan_watch_service,
     preview_watch_service,
+    watch_summary_field,
 )
 from steamshare.core.proton_mapping import DEFAULT_PROTON_TOOL
 from steamshare.core.systemd_units import (
@@ -77,6 +91,9 @@ from steamshare.core.systemd_units import (
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
+
+DRY_RUN_HEADER = "Dry run: nothing is written and systemctl is not run."
+MOUNTS_SECTION_TITLE = "Mounts"
 
 
 @dataclass(frozen=True)
@@ -95,6 +112,8 @@ class System:
     launcher: Path
     # Runs the systemctl commands for the user's own service manager.
     run_command: CommandRunner
+    # The report's markers and arrow: Unicode, or ASCII where it cannot show.
+    symbols: Symbols
 
 
 def add_parser(subcommands: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
@@ -170,11 +189,15 @@ def run(arguments: argparse.Namespace) -> int:
         console=terminal_console(),
         launcher=LAUNCHER_PATH,
         run_command=run_command,
+        symbols=choose_symbols(sys.stdout.encoding, os.environ),
     )
     return install(arguments, system)
 
 
 def install(arguments: argparse.Namespace, system: System) -> int:
+    report = RunReport(
+        symbols=system.symbols, home=system.invoking_user.home, dry_run=arguments.dry_run
+    )
     try:
         config, choices = build_config(arguments, system)
         units = build_units(config)
@@ -186,22 +209,33 @@ def install(arguments: argparse.Namespace, system: System) -> int:
             steam_root=arguments.steam_root,
             launcher=system.launcher,
         )
-        summary = [
-            *format_summary(choices, config.mount_point, [unit.name for unit in units]),
-            *format_watch_summary(watch),
-        ]
+        summary_lines = aligned_fields(
+            [*summary_fields(choices, config.mount_point), watch_summary_field(watch)]
+        )
         confirm_install(
-            summary, system.console, assume_yes=arguments.yes, dry_run=arguments.dry_run
+            [section_header("Summary"), *summary_lines, ""],
+            system.console,
+            assume_yes=arguments.yes,
+            dry_run=arguments.dry_run,
         )
         if arguments.dry_run:
-            preview_install(config, choices, units, system)
-            preview_watch_service(watch)
+            mounts_notes = preview_install(config, choices, units, system, report)
+            watch_notes = preview_watch_service(watch, report)
         else:
-            apply_install(config, choices, units, system)
-            apply_watch_service(
-                watch, change_owner=system.change_owner, run_command=system.run_command
+            # One timestamp for the whole run, so every backup it makes shares
+            # one suffix and the report can name it once.
+            now = datetime.now()
+            mounts_notes = apply_install(config, choices, units, system, report, now)
+            watch_notes = apply_watch_service(
+                watch,
+                change_owner=system.change_owner,
+                run_command=system.run_command,
+                report=report,
+                now=now,
             )
-            _print_next_step(config)
+        notes = combine_notes(mounts_notes, watch_notes, _check_setup_notes(config))
+        for line in format_closing(notes, dry_run=arguments.dry_run):
+            print(line)
     except (InstallError, PartitionCleanupError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return EXIT_FAILURE
@@ -259,30 +293,49 @@ def _needs_root_message(arguments: argparse.Namespace) -> str:
 
 
 def preview_install(
-    config: InstallConfig, choices: InstallChoices, units: list[UnitFile], system: System
-) -> None:
-    print("Dry run: nothing is written and systemctl is not run.\n")
+    config: InstallConfig,
+    choices: InstallChoices,
+    units: list[UnitFile],
+    system: System,
+    report: RunReport,
+) -> ClosingNotes:
+    print(DRY_RUN_HEADER)
+    print()
     for unit in units:
         print(f"--- {system.unit_directory / unit.name}")
         print(unit.content)
-    print("Planned changes:")
-    for outcome in install_unit_files(units, system.unit_directory, dry_run=True):
-        print(format_outcome(outcome, PLANNED_ACTION_LABELS))
+    print(report.section(MOUNTS_SECTION_TITLE, system.unit_directory))
+    unit_outcomes = install_unit_files(units, system.unit_directory, dry_run=True)
+    for outcome in unit_outcomes:
+        print(report.outcome(outcome, system.unit_directory))
     for outcome in _create_data_directories(config, system, dry_run=True):
-        print(format_outcome(outcome, PLANNED_ACTION_LABELS))
+        print(report.outcome(outcome, system.unit_directory))
     for command in plan_enable_commands(_names_to_enable(units)):
-        print(f"  would run: {shlex.join(command)}")
+        print(report.planned(WOULD_RUN_WORD, shlex.join(command)))
     if choices.create_library_folder:
         # Not checked on disk: before the first install the partition is not
         # mounted there yet, so the folder's presence cannot be seen.
-        print(f"  would create after mounting, if missing: {_library_path(config)}")
+        print(
+            report.planned(
+                PLANNED_FILE_WORDS[FileAction.CREATED],
+                f"{_library_path(config)}  (after mounting, if missing)",
+            )
+        )
+    print()
+    return ClosingNotes(unit_outcomes=tuple(unit_outcomes))
 
 
 def apply_install(
-    config: InstallConfig, choices: InstallChoices, units: list[UnitFile], system: System
-) -> None:
+    config: InstallConfig,
+    choices: InstallChoices,
+    units: list[UnitFile],
+    system: System,
+    report: RunReport,
+    now: datetime,
+) -> ClosingNotes:
+    print(report.section(MOUNTS_SECTION_TITLE, system.unit_directory))
     try:
-        unit_outcomes = install_unit_files(units, system.unit_directory)
+        unit_outcomes = install_unit_files(units, system.unit_directory, now=now)
         directory_outcomes = _create_data_directories(config, system, dry_run=False)
     except OSError as error:
         raise InstallError(
@@ -290,7 +343,7 @@ def apply_install(
             "Nothing was enabled; fix the cause and run install again."
         ) from error
     for outcome in [*unit_outcomes, *directory_outcomes]:
-        print(format_outcome(outcome, DONE_ACTION_LABELS))
+        print(report.outcome(outcome, system.unit_directory))
 
     names_to_enable = _names_to_enable(units)
     try:
@@ -301,21 +354,27 @@ def apply_install(
             f"See why with `systemctl status {' '.join(names_to_enable)}` "
             "and `journalctl -xe`, then run install again."
         ) from error
-    print(f"Enabled and started: {' '.join(names_to_enable)}")
+    # Only mount units are enabled: the ntfs3 loader is pulled in by them.
+    # Their names are in the lines above.
+    print(report.done(STARTED_WORD, f"{len(names_to_enable)} mounts"))
 
     if choices.create_library_folder:
-        _create_library_folder(config, system)
+        _create_library_folder(config, system, report)
+    print()
+    return ClosingNotes(unit_outcomes=tuple(unit_outcomes))
 
 
-def _print_next_step(config: InstallConfig) -> None:
+def _check_setup_notes(config: InstallConfig) -> ClosingNotes:
+    # doctor reads the user's Steam files, so it runs as that user, not root.
     library = shlex.quote(str(_library_path(config)))
-    print(
-        "Next step: check the setup as your desktop user (without sudo), from the "
-        f"repository folder: `{LAUNCHER_COMMAND} doctor --library {library}`."
+    return ClosingNotes(
+        next_steps=(
+            f"Check the setup, without sudo:  {LAUNCHER_COMMAND} doctor --library {library}",
+        )
     )
 
 
-def _create_library_folder(config: InstallConfig, system: System) -> None:
+def _create_library_folder(config: InstallConfig, system: System, report: RunReport) -> None:
     # Only now: before the mount is started, the path is an empty folder on
     # the Linux root filesystem, not on the partition. systemd may already
     # have created it, as the parent of the bind mounts; then it is reported
@@ -334,7 +393,7 @@ def _create_library_folder(config: InstallConfig, system: System) -> None:
             "Create the folder from Windows or as your user, then run install again."
         ) from error
     for outcome in outcomes:
-        print(format_outcome(outcome, DONE_ACTION_LABELS))
+        print(report.outcome(outcome))
 
 
 def _library_path(config: InstallConfig) -> PurePosixPath:

@@ -18,6 +18,9 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
+# A backup is named `<name>.bak-<timestamp>`; systemd ignores that name, since
+# `.bak-...` is not a unit type.
+BACKUP_NAME_INFIX = ".bak-"
 BACKUP_TIMESTAMP_FORMAT = "%Y%m%d-%H%M%S"
 
 # Changes a path's owner; `os.chown` in production, a recorder in tests. A
@@ -27,7 +30,8 @@ ChangeOwner = Callable[[Path, int, int], None]
 
 def back_up_file(path: Path, now: datetime) -> Path:
     """Copy the file to `<name>.bak-<timestamp>` and return the copy's path."""
-    backup = path.with_name(f"{path.name}.bak-{now.strftime(BACKUP_TIMESTAMP_FORMAT)}")
+    timestamp = now.strftime(BACKUP_TIMESTAMP_FORMAT)
+    backup = path.with_name(f"{path.name}{BACKUP_NAME_INFIX}{timestamp}")
     shutil.copy2(path, backup)
     return backup
 

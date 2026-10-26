@@ -1,4 +1,4 @@
-"""Argument types and output formatting shared by several commands.
+"""Argument types and constants shared by several commands.
 
 They live here, not in one command's module, so a command never imports
 another command.
@@ -7,26 +7,12 @@ another command.
 import argparse
 from pathlib import PurePosixPath
 
-from steamshare.adapters.unit_installer import DirectoryOutcome, FileAction, UnitFileOutcome
-
 ROOT_USER_ID = 0
 
 # How hints tell the user to run steamshare: through the launcher at the
 # repository root, from the repository folder, as the README shows.
 LAUNCHER_COMMAND = "./steamshare"
 SUDO_INSTALL_COMMAND = f"sudo {LAUNCHER_COMMAND} install"
-
-# How each outcome reads, before (dry run) and after it happened.
-PLANNED_ACTION_LABELS = {
-    FileAction.UNCHANGED: "unchanged",
-    FileAction.CREATED: "would create",
-    FileAction.UPDATED: "would update (old file backed up first)",
-}
-DONE_ACTION_LABELS = {
-    FileAction.UNCHANGED: "unchanged",
-    FileAction.CREATED: "created",
-    FileAction.UPDATED: "updated",
-}
 
 
 def absolute_path(value: str) -> PurePosixPath:
@@ -54,12 +40,3 @@ def relative_folder(value: str) -> str:
             "or Games/SteamLibrary"
         )
     return value
-
-
-def format_outcome(
-    outcome: UnitFileOutcome | DirectoryOutcome, labels: dict[FileAction, str]
-) -> str:
-    line = f"  {labels[outcome.action]}: {outcome.path}"
-    if isinstance(outcome, UnitFileOutcome) and outcome.backup is not None:
-        line += f" (backup: {outcome.backup})"
-    return line
