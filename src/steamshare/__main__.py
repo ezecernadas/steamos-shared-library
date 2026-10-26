@@ -13,7 +13,7 @@ from steamshare.cli import doctor, force_proton, install, uninstall, watch
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="steamshare",
-        description="Share one NTFS Steam library between Windows and SteamOS.",
+        description="Share one NTFS Steam library between Windows and Linux on a dual-boot PC.",
     )
     subcommands = parser.add_subparsers(title="commands", required=True)
     doctor.add_parser(subcommands)

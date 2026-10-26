@@ -1,7 +1,7 @@
 [project]
 name = "steamshare"
 version = "0.1.0"
-description = "Share one NTFS Steam library between Windows and SteamOS"
+description = "Share one NTFS Steam library between Windows and Linux on a dual-boot PC"
 readme = "README.md"
 license = "GPL-3.0-or-later"
 requires-python = ">=3.11"

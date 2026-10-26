@@ -1,13 +1,13 @@
-# steamos-shared-library
+# steamshare
 
-[![CI](https://github.com/ezecernadas/steamos-shared-library/actions/workflows/ci.yml/badge.svg)](https://github.com/ezecernadas/steamos-shared-library/actions/workflows/ci.yml)
+[![CI](https://github.com/ezecernadas/steamshare/actions/workflows/ci.yml/badge.svg)](https://github.com/ezecernadas/steamshare/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB?logo=python&logoColor=white)](pyproject.toml)
-[![Platforms](https://img.shields.io/badge/platforms-SteamOS%20%7C%20Linux%20%7C%20Windows-1b2838?logo=steam&logoColor=white)](#requirements)
+[![Platforms](https://img.shields.io/badge/platforms-Linux%20%7C%20Windows-1b2838?logo=steam&logoColor=white)](#requirements)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 
-Share one NTFS Steam library between Windows and SteamOS
+Share one NTFS Steam library between Windows and Linux on a dual-boot PC
 
-A dual-boot PC normally needs every game installed twice: once for Windows, once for SteamOS or Linux. steamshare lets both systems use **one Steam library on one NTFS partition**. Install a game from either side and it runs on both, with no second download.
+A dual-boot PC normally needs every game installed twice: once for Windows, once for Linux. steamshare lets both systems use **one Steam library on one NTFS partition**. Install a game from either side and it runs on both, with no second download.
 
 **Highlights**
 
@@ -15,7 +15,7 @@ A dual-boot PC normally needs every game installed twice: once for Windows, once
 - 🛡️ **NTFS stays clean for Windows.** The things that usually corrupt a shared NTFS library are kept off it.
 - 🖱️ **Nothing to remember.** Click *Install* in Steam on Linux and the Windows build lands in the shared library, even for games that also have a Linux build.
 - 🩺 **Checks itself.** `doctor` verifies the whole setup, and every error says what to do next.
-- 📦 **No dependencies.** It needs only the `python3` and systemd that SteamOS already ships, plus the PowerShell built into Windows.
+- 📦 **No dependencies.** It needs only the `python3` and systemd that modern Linux distros already ship, plus the PowerShell built into Windows.
 
 ## Contents
 
@@ -64,10 +64,18 @@ The design and the experiments behind it are in [docs/PLAN.md](docs/PLAN.md).
 
 | | Needed | Notes |
 |---|---|---|
-| **Linux** | `python3` 3.11+, systemd 248+, the `ntfs3` kernel module | SteamOS and current desktop distros ship all three |
+| **Linux** | `python3` 3.11+, systemd 248+, the `ntfs3` kernel module (kernel 5.15+), util-linux 2.37+ | Any current distro, Ubuntu-based or not. Ubuntu 22.04 is too old: it ships Python 3.10 |
 | **Windows** | Windows PowerShell 5.1 | Built into Windows 10 and 11 |
 | **Disk** | One NTFS partition for the library, outside the Windows system drive | It can be created by shrinking the Windows partition in *Disk Management* |
 | **Steam** | Run at least once on each system | |
+
+### Tested on
+
+| System | Status |
+|---|---|
+| Zorin OS 18 (Ubuntu 24.04 base) + Windows | ✅ Tested end to end |
+| SteamOS 3.8 | ⏳ Planned |
+| Other distros that meet the requirements | Expected to work, not yet tested. Reports are welcome |
 
 ## Install
 
@@ -81,11 +89,13 @@ powershell -ExecutionPolicy Bypass -File windows\setup.ps1
 
 It asks you to confirm the shared library it found, or to pick one when there are several. Then shut Windows down fully: use *Shut down*, not *Restart*, so the volume is left clean.
 
-### 2. On Linux or SteamOS
+### 2. On Linux
+
+Download the latest release from the [Releases page](https://github.com/ezecernadas/steamshare/releases) and extract it, or clone the repository to follow the latest changes:
 
 ```bash
-git clone https://github.com/ezecernadas/steamos-shared-library
-cd steamos-shared-library
+git clone https://github.com/ezecernadas/steamshare
+cd steamshare
 sudo ./steamshare install
 ```
 
@@ -214,9 +224,12 @@ It works today on a Zorin OS + Windows dual boot. In testing, a native Linux gam
 - [x] Boot-time mounts, `doctor`, `force-proton`, live `watch`
 - [x] Windows setup script
 - [x] Continuous integration
-- [ ] Validation on SteamOS itself: read-only root, A/B updates, Game Mode
+- [ ] Validation on SteamOS: read-only root, A/B updates, Game Mode
+- [ ] Validation on more distros (Fedora, Arch, Bazzite)
 - [x] `uninstall` command
 - [ ] Linux-only tools (Proton, Steam Linux Runtime) kept on an ext4 library
+
+Changes between versions are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## Contributing
 
