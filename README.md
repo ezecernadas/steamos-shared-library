@@ -15,7 +15,7 @@ NTFS is not what breaks Steam on Linux. Linux NTFS drivers handle symlinks, and 
 
 ## Status
 
-Planning. See [docs/PLAN.md](docs/PLAN.md).
+The manual proof of concept passed: one install of a game ran on both Windows and Linux (Proton) with no re-download and a clean `chkdsk`. Tooling is not written yet. See [docs/PLAN.md](docs/PLAN.md).
 
 ## Prior art
 

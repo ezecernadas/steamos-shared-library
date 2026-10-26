@@ -15,10 +15,11 @@ A dual-boot PC running Windows and SteamOS 3.8 (reference hardware: RX 6700 XT, 
 
 | Component | Responsibility |
 |---|---|
-| NTFS mount unit | Mounts the library partition at boot. It is a `systemd` unit in `/etc/systemd/system/` (survives SteamOS A/B updates) using `ntfs3` with `uid=1000,gid=1000,umask=022,windows_names,nofail`. |
+| NTFS mount unit | Mounts the library partition at boot. It is a `systemd` unit in `/etc/systemd/system/` (survives SteamOS A/B updates) using `ntfs3` with `uid=1000,gid=1000,umask=022,windows_names,nofail`. Some distros blacklist `ntfs3` (Zorin ships `/etc/modprobe.d/zorin-blacklist-ntfs3.conf`), so the module is loaded explicitly through `modules-load.d` without touching the distro blacklist. |
 | Bind-mount units | Mount `~/.local/share/steam-shared/{compatdata,shadercache}` (ext4) over `SteamLibrary/steamapps/{compatdata,shadercache}`. They have `Requires=`/`After=` on the NTFS mount. |
-| `force-proton` | A Python tool built on the `vdf` library. It writes `CompatToolMapping` in `config.vdf` for every app in the shared library that ships a native Linux build. It refuses to run while Steam is open, and backs up first. |
-| `doctor` | Health check: the mount is `ntfs3` (not `fuseblk`), the volume is neither dirty nor read-only, the bind mounts are active, and there are no Windows-invalid names or stray symlinks on NTFS. |
+| `force-proton` | A Python tool built on the `vdf` library. It writes `CompatToolMapping` in `config.vdf` for every app in the shared library that ships a native Linux build. It refuses to run while Steam is open, and backs up first. It must run **before** the library is added to Linux Steam (or before Steam next starts); otherwise Steam queues the Linux depot. |
+| Linux tools library | Proton and Steam Linux Runtime are installed into the same library as the game unless told otherwise. A dedicated ext4 library keeps those tools (about 1.4 GB and 3,000+ symlinks) off NTFS. |
+| `doctor` | Health check: the mount is `ntfs3` (not `fuseblk`), the volume is neither dirty nor read-only, the bind mounts are active, and there are no Windows-invalid names on NTFS. It also lists symlinks on NTFS outside the known Linux-tool folders (Linux Steam creates `steamapps/common/Steam.dll` as a symlink to `~/.steam/.../legacycompat`). |
 | `install.sh` / `uninstall.sh` | Idempotent setup and teardown; they detect the partition by UUID. |
 | `windows/setup.ps1` | Disables Fast Startup and hibernation, and checks the library path. |
 
@@ -26,7 +27,7 @@ A dual-boot PC running Windows and SteamOS 3.8 (reference hardware: RX 6700 XT, 
 
 Each phase ends with passing tests.
 
-0. **Manual spike** with one game. Confirm that the bind mount and `windows_names` work, and that Windows and SteamOS open the same install without re-downloading. This is the go/no-go gate.
+0. **Manual spike** with one game. Confirm that the bind mount and `windows_names` work, and that Windows and SteamOS open the same install without re-downloading. This is the go/no-go gate. **Done: GO.** See [Phase 0 results](#phase-0-results).
 1. NTFS mount unit and a minimal `doctor`.
 2. Bind mounts for `compatdata` and `shadercache`.
 3. `force-proton`, with pytest over `config.vdf` and `appmanifest_*.acf` fixtures.
@@ -36,6 +37,30 @@ Each phase ends with passing tests.
    - lint with `shellcheck` and `ruff`;
    - `pytest`;
    - an integration test that creates an NTFS image (`mkntfs` on a loop device), mounts it with `ntfs3`, and checks `windows_names` and the bind mounts.
+
+## Phase 0 results
+
+Run on 2026-10-26 on a Zorin OS 18 laptop (kernel 7.0, `ntfs3`) dual-booting Windows. The goal was to validate the mechanism, not the SteamOS specifics. The test game was HYPERFIGHT (appid 1005870), chosen deliberately because it ships a native Linux build.
+
+**Setup:**
+1. A dedicated 96 GB NTFS partition was created from Windows.
+2. Windows Steam installed the game into `D:\SteamLibrary`.
+3. In Linux, the partition was mounted with `ntfs3` and `windows_names`, and `compatdata` and `shadercache` were bind-mounted from ext4.
+4. With Steam closed, `CompatToolMapping` was set to `proton_experimental` in `config.vdf` by hand. Only after that was the library folder added to Linux Steam.
+
+**Results:**
+- `windows_names` rejects `c:`, `aux`, and names with a trailing dot with `EINVAL`. Inside the bind-mounted `compatdata`, `c:` is accepted, because it lands on ext4.
+- Linux Steam detected the game as installed, and the Windows depot (1005871) was kept with no re-download. The ~80 MB it downloaded was the shader pre-cache, which landed in the bind-mounted `shadercache`.
+- The game ran under Proton. The prefix (`compatdata/1005870`, including `dosdevices/c:`) lives on ext4, and NTFS has no Windows-invalid names.
+- Back on Windows, the game launched without validating or downloading, and `chkdsk D:` reported no problems.
+
+**Findings that change the plan:**
+- Zorin blacklists `ntfs3`, so the module has to be loaded explicitly.
+- Proton Experimental and SteamLinuxRuntime_4 were installed into the shared NTFS library: about 1.4 GB and 3,071 symlinks. `chkdsk` accepted them, but they belong on ext4.
+- Linux Steam created `steamapps/common/Steam.dll` as a symlink to a Linux path. It is harmless to Windows Steam so far, but `doctor` should report it.
+- Linux Steam rewrites `appmanifest_*.acf`: it drops `LauncherPath` and changes `DownloadType` and `TargetBuildID`. Windows Steam accepted the result.
+
+Not yet validated: SteamOS itself (automount, `/etc` persistence across updates), games with anti-cheat, and switching OS repeatedly over time.
 
 ## Testing
 
