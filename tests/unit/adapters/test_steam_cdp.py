@@ -204,17 +204,42 @@ def test_the_session_closes_its_connection_as_a_context_manager() -> None:
 # --- Turning the debugger on -----------------------------------------------------
 
 
-def test_turning_the_debugger_on_creates_the_empty_flag_file(tmp_path: Path) -> None:
-    assert turn_on_remote_debugging(tmp_path, dry_run=False) is True
+class RecordingChown:
+    def __init__(self) -> None:
+        self.calls: list[tuple[Path, int, int]] = []
+
+    def __call__(self, path: Path, user_id: int, group_id: int) -> None:
+        self.calls.append((Path(path), user_id, group_id))
+
+
+def turn_on(steam_root: Path, chown: RecordingChown, *, dry_run: bool = False) -> bool:
+    return turn_on_remote_debugging(
+        steam_root, user_id=1000, group_id=1000, change_owner=chown, dry_run=dry_run
+    )
+
+
+def test_turning_the_debugger_on_creates_the_empty_flag_file_owned_by_the_user(
+    tmp_path: Path,
+) -> None:
+    chown = RecordingChown()
+
+    assert turn_on(tmp_path, chown) is True
     assert remote_debugging_flag_path(tmp_path).read_text() == ""
+    # install creates it as root; the user must be able to delete it.
+    assert chown.calls == [(remote_debugging_flag_path(tmp_path), 1000, 1000)]
 
 
 def test_turning_the_debugger_on_again_changes_nothing(tmp_path: Path) -> None:
-    turn_on_remote_debugging(tmp_path, dry_run=False)
+    turn_on(tmp_path, RecordingChown())
+    chown = RecordingChown()
 
-    assert turn_on_remote_debugging(tmp_path, dry_run=False) is False
+    assert turn_on(tmp_path, chown) is False
+    assert chown.calls == []
 
 
 def test_a_dry_run_only_reports_that_the_flag_file_is_missing(tmp_path: Path) -> None:
-    assert turn_on_remote_debugging(tmp_path, dry_run=True) is True
+    chown = RecordingChown()
+
+    assert turn_on(tmp_path, chown, dry_run=True) is True
     assert not remote_debugging_flag_path(tmp_path).exists()
+    assert chown.calls == []

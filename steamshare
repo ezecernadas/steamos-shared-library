@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Run steamshare from this repository with the system's python3.
+#
+# Why this wrapper exists: the package lives in src/steamshare (the "src
+# layout"), so `python3 -m steamshare` from the repository root does not find
+# it, and users get no packaging step: SteamOS has a read-only root and no
+# uv, and a system-wide pip install would not survive its updates
+# (CONTRIBUTING.md, rule 1). The runtime needs only the standard library, so
+# putting src/ on PYTHONPATH is all it takes.
+#
+# It holds no logic (CONTRIBUTING.md, rule 2). The minimum Python version and
+# the message for an older one live in src/steamshare/python_requirement.py.
+#
+# The repository is found from the script's real location, so a symlink to it
+# (for example in ~/.local/bin) works too. The watch service that `install`
+# writes runs this script by its absolute path, so moving the repository means
+# running `sudo ./steamshare install` again.
+set -euo pipefail
+
+repository="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+source_directory="${repository}/src"
+
+if ! command -v python3 >/dev/null; then
+    echo "steamshare needs python3, but none is on PATH. Install Python 3 from your" \
+        "distribution, then run steamshare again." >&2
+    exit 1
+fi
+
+# Exits with an error message when python3 is older than steamshare needs.
+python3 "${source_directory}/steamshare/python_requirement.py"
+
+exec env PYTHONPATH="${source_directory}${PYTHONPATH:+:${PYTHONPATH}}" python3 -m steamshare "$@"

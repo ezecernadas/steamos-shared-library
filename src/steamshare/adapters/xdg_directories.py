@@ -1,7 +1,9 @@
 """Find the user's config folder, as the XDG Base Directory spec defines it.
 
-Both steamshare's state file and the user's systemd units live there, and
-both must agree on where "there" is, so the rule is written once.
+steamshare's state file lives there. `force-proton` and `watch` both use it,
+and must agree on where "there" is, so the rule is written once. (`install`
+does not use it for the user's unit folder: it runs as root, without the
+user's environment; see `watch_service_setup`.)
 """
 
 from collections.abc import Mapping

@@ -24,6 +24,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Protocol
 
+from steamshare.adapters.safe_writes import ChangeOwner
 from steamshare.adapters.websocket_client import (
     WebSocketClosedError,
     WebSocketError,
@@ -79,16 +80,26 @@ def remote_debugging_flag_path(steam_root: Path) -> Path:
     return steam_root / REMOTE_DEBUGGING_FLAG_FILE
 
 
-def turn_on_remote_debugging(steam_root: Path, *, dry_run: bool) -> bool:
+def turn_on_remote_debugging(
+    steam_root: Path,
+    *,
+    user_id: int,
+    group_id: int,
+    change_owner: ChangeOwner,
+    dry_run: bool,
+) -> bool:
     """Create the empty flag file unless it exists; return whether it was (or would be) new.
 
     Steam reads it only when it starts, so a new file needs one Steam restart.
+    `install` creates it as root, so it is then given to the user, who can
+    delete it to turn the debugger off again.
     """
     flag_file = remote_debugging_flag_path(steam_root)
     if flag_file.exists():
         return False
     if not dry_run:
         flag_file.touch()
+        change_owner(flag_file, user_id, group_id)
     return True
 
 
@@ -105,8 +116,8 @@ def find_shared_js_context(steam_root: Path, *, fetch_json: FetchJson = fetch_js
         raise SteamDebuggerUnavailableError(
             f"Steam's debugger is not answering on {DEBUGGER_ADDRESS} ({error}). Either "
             f"Steam is closed, or {remote_debugging_flag_path(steam_root)} is missing, or "
-            "Steam was not restarted after it was created. Run `python -m steamshare "
-            "install-watch` to create the file, then restart Steam once."
+            "Steam was not restarted after it was created. Run `sudo ./steamshare "
+            "install` from the repository folder to create the file, then restart Steam once."
         ) from error
     for target in targets if isinstance(targets, list) else []:
         if isinstance(target, dict) and target.get(TARGET_TITLE_KEY) == SHARED_JS_CONTEXT_TITLE:

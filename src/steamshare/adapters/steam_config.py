@@ -11,11 +11,23 @@ from pathlib import Path
 from steamshare.adapters.safe_writes import back_up_file, write_file_atomically
 from steamshare.core.vdf import KeyValues, parse_vdf, serialize_vdf
 
-# A symlink to the real install on both Debian/Ubuntu
-# (~/.steam/debian-installation) and SteamOS/Arch (~/.local/share/Steam).
-# The Flatpak lives in ~/.var/app/com.valvesoftware.Steam/.local/share/Steam
-# and needs --steam-root.
-DEFAULT_STEAM_ROOT = Path.home() / ".steam" / "steam"
+# Relative to the user's home: a symlink to the real install on both
+# Debian/Ubuntu (~/.steam/debian-installation) and SteamOS/Arch
+# (~/.local/share/Steam). The Flatpak lives in
+# ~/.var/app/com.valvesoftware.Steam/.local/share/Steam and needs --steam-root.
+STEAM_ROOT_IN_HOME = Path(".steam") / "steam"
+
+
+def default_steam_root(home: Path) -> Path:
+    """Return where Steam lives for the user whose home this is.
+
+    `install` runs as root, so it passes the desktop user's home, not its own.
+    """
+    return home / STEAM_ROOT_IN_HOME
+
+
+# For the commands the desktop user runs directly, without sudo.
+DEFAULT_STEAM_ROOT = default_steam_root(Path.home())
 
 # Relative to the Steam root, the same on every install type (Debian package,
 # SteamOS, Flatpak).

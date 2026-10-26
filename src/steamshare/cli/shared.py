@@ -11,6 +11,11 @@ from steamshare.adapters.unit_installer import DirectoryOutcome, FileAction, Uni
 
 ROOT_USER_ID = 0
 
+# How hints tell the user to run steamshare: through the launcher at the
+# repository root, from the repository folder, as the README shows.
+LAUNCHER_COMMAND = "./steamshare"
+SUDO_INSTALL_COMMAND = f"sudo {LAUNCHER_COMMAND} install"
+
 # How each outcome reads, before (dry run) and after it happened.
 PLANNED_ACTION_LABELS = {
     FileAction.UNCHANGED: "unchanged",

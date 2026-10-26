@@ -11,6 +11,7 @@ import pytest
 
 from steamshare.adapters.steam_config import (
     SteamConfigError,
+    default_steam_root,
     read_steam_config,
     steam_config_path,
     write_steam_config,
@@ -18,6 +19,11 @@ from steamshare.adapters.steam_config import (
 
 NOW = datetime(2026, 10, 26, 18, 30, 5)
 CONFIG_TEXT = '"InstallConfigStore"\n{\n\t"Software"\n\t{\n\t}\n}\n'
+
+
+def test_the_default_steam_root_is_in_the_given_home() -> None:
+    # install runs as root, so the home is the desktop user's, not root's.
+    assert default_steam_root(Path("/home/player")) == Path("/home/player/.steam/steam")
 
 
 def test_the_config_lives_in_the_config_folder_of_the_steam_root() -> None:

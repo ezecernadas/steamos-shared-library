@@ -1,10 +1,11 @@
 """The `watch` command: force Proton live, so "Install" in Steam fetches the Windows build.
 
 `force-proton` edits `config.vdf`, which only works with Steam closed. This
-command instead runs while Steam is open, as a user service (see
-`install-watch`): it asks the running client which games are native Linux
-ones and maps them to Proton before the user installs them, through the same
-API the game's Properties > Compatibility uses (`adapters.steam_client_api`).
+command instead runs while Steam is open, as a user service that `install`
+sets up (see `watch_service_setup`): it asks the running client which games
+are native Linux ones and maps them to Proton before the user installs them,
+through the same API the game's Properties > Compatibility uses
+(`adapters.steam_client_api`).
 
 Each pass first takes a cheap snapshot of the library, and from it
 `core.watch_pass_scope` decides which games' details to read: every game on

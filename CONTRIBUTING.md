@@ -2,6 +2,10 @@
 
 These rules apply to all code in this repository.
 
+## Development environment
+
+`uv sync` creates the virtual environment with the development tools; then run `uv run pytest`, `uv run ruff check .` and `uv run ruff format .`, and `shellcheck` on shell scripts. This is for contributors only: users never need `uv` or a virtual environment, and run everything through the `./steamshare` launcher with the system's `python3`.
+
 ## 0. Clean, scalable, and easy to understand
 
 This rule overrides convenience. A reader new to the project should understand any module by reading it once.

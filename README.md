@@ -19,20 +19,23 @@ Working on a Zorin OS + Windows dual boot: `install` mounts the library at boot,
 
 ## Linux setup
 
-From the repository folder, after `uv sync`:
+It needs only `python3` (3.11 or newer) and systemd 248 or newer, which SteamOS and current desktop distros ship. Nothing is installed besides the units below. Clone the repository, then, from its folder:
 
 ```bash
-sudo .venv/bin/python -m steamshare install
-.venv/bin/python -m steamshare install-watch
+sudo ./steamshare install
+./steamshare doctor --library /mnt/steamlib/SteamLibrary
 ```
 
-- **`install`** lists the NTFS partitions and what each one holds (Windows, recovery, a Steam library). To see that, it mounts each one read-only for a moment, which writes nothing. It asks which partition is the shared library, then writes systemd units that mount it at every boot with `ntfs3` and `windows_names`, and that bind-mount `compatdata` and `shadercache` from ext4.
-  - `--dry-run` shows the plan.
-  - `--partition-uuid`, `--library-folder`, `--mount-point` (default `/mnt/steamlib`) and `--yes` skip the questions, for scripts.
-- **`install-watch`** (no sudo) enables Steam's local debugger and a user service. With Steam open, the service forces Proton on games that ship a native Linux build, so installing one into the shared library fetches its Windows build.
-  - Set the shared library as the default in Steam (Settings → Storage → Make default) and a click on Install is all it takes.
-  - `force-proton --keep-native <appid>` opts a game out.
-- **`doctor --library /mnt/steamlib/SteamLibrary`** checks the whole setup.
+- **`sudo ./steamshare install`** sets up everything, and shows a summary to confirm first.
+  - **The mounts.** It lists the NTFS partitions and what each one holds (Windows, recovery, a Steam library). To see that, it mounts each one read-only for a moment, which writes nothing. It asks which partition is the shared library, then writes systemd units that mount it at every boot with `ntfs3` and `windows_names`, and that bind-mount `compatdata` and `shadercache` from ext4.
+  - **The watch service.** For the user who ran sudo, it turns on Steam's local debugger and enables the `steamshare-watch` user service. With Steam open, the service forces Proton on games that ship a native Linux build, so installing one into the shared library fetches its Windows build. Restart Steam once afterwards so it turns the debugger on, and set the shared library as the default in Steam (Settings → Storage → Make default): then a click on Install is all it takes. If Steam has never run, this part is skipped; run Steam once, then run install again.
+  - The service runs `./steamshare` from this folder, so keep the repository where it is. After moving it, run install again.
+  - Running it again is safe: it changes only what is out of date, and backs up a unit before replacing it.
+  - `--dry-run` shows the plan and changes nothing; it does not need sudo.
+  - `--no-watch` installs only the mounts.
+  - `--partition-uuid`, `--library-folder`, `--mount-point` (default `/mnt/steamlib`) and `--yes` skip the questions, for scripts. `--steam-root` names a Steam installed elsewhere, such as the Flatpak.
+- **`./steamshare doctor --library <library>`** checks the whole setup. Use the library path that install printed.
+- **`./steamshare force-proton --keep-native <appid>`** opts a game out of being forced to Proton.
 
 ## Windows setup
 

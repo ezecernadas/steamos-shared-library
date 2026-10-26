@@ -19,7 +19,6 @@ from steamshare.core.systemd_units import (
     WatchServiceConfig,
     build_units,
     escape_unit_path,
-    generated_header,
     linux_only_data_paths,
     mount_unit_name,
     quote_exec_argument,
@@ -207,23 +206,39 @@ def test_percent_signs_in_paths_are_escaped_so_systemd_does_not_expand_them() ->
 # --- The watch service ---------------------------------------------------------
 
 WATCH_CONFIG = WatchServiceConfig(
-    python=PurePosixPath("/home/player/steamshare/.venv/bin/python"),
+    launcher=PurePosixPath("/home/player/steamos-shared-library/steamshare"),
     library=PurePosixPath("/mnt/steamlib/SteamLibrary"),
     tool="proton_experimental",
     steam_root=PurePosixPath("/home/player/.steam/steam"),
 )
 
 
-def test_the_watch_service_runs_watch_with_this_python_for_the_library() -> None:
+def test_the_watch_service_runs_watch_through_the_launcher_for_the_library() -> None:
     unit = render_watch_service(WATCH_CONFIG)
 
     assert unit.name == WATCH_SERVICE
     assert unit.enable_at_boot
     assert (
-        "ExecStart=/home/player/steamshare/.venv/bin/python -m steamshare watch "
+        "ExecStart=/home/player/steamos-shared-library/steamshare watch "
         "--library /mnt/steamlib/SteamLibrary --tool proton_experimental "
         "--steam-root /home/player/.steam/steam"
     ) in lines_of(unit)
+
+
+def test_the_watch_service_never_names_a_virtual_environment() -> None:
+    assert ".venv" not in render_watch_service(WATCH_CONFIG).content
+
+
+def test_a_launcher_path_with_spaces_and_percent_is_quoted_for_systemd() -> None:
+    config = WatchServiceConfig(
+        launcher=PurePosixPath("/home/player/My Games/100%/steamshare"),
+        library=PurePosixPath("/mnt/steamlib/SteamLibrary"),
+        tool="proton_experimental",
+        steam_root=PurePosixPath("/home/player/.steam/steam"),
+    )
+
+    [exec_start] = [line for line in lines_of(render_watch_service(config)) if "ExecStart=" in line]
+    assert exec_start.startswith('ExecStart="/home/player/My Games/100%%/steamshare" watch ')
 
 
 def test_the_watch_service_restarts_on_failure_and_starts_with_the_session() -> None:
@@ -234,14 +249,7 @@ def test_the_watch_service_restarts_on_failure_and_starts_with_the_session() -> 
 
 
 def test_the_watch_service_says_which_command_generated_it() -> None:
-    unit = render_watch_service(WATCH_CONFIG)
-
-    assert unit.content.startswith(generated_header("install-watch"))
-    assert "`python -m steamshare install-watch`" in unit.content
-
-
-def test_install_units_keep_their_header() -> None:
-    assert generated_header("install") == GENERATED_HEADER
+    assert render_watch_service(WATCH_CONFIG).content.startswith(GENERATED_HEADER)
 
 
 @pytest.mark.parametrize(

@@ -1,7 +1,7 @@
 """Write the generated unit files and create the ext4 folders they mount.
 
-Both run as root and touch system files and the user's home, so they follow
-CONTRIBUTING.md rule 5:
+All of it runs as root and touches system files and the user's home, so it
+follows CONTRIBUTING.md rule 5:
 
 - Idempotent: a unit file whose content already matches is not rewritten,
   and an existing folder is left alone.
@@ -12,13 +12,13 @@ CONTRIBUTING.md rule 5:
 """
 
 import os
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
-from steamshare.adapters.safe_writes import back_up_file, write_file_atomically
+from steamshare.adapters.safe_writes import ChangeOwner, back_up_file, write_file_atomically
 from steamshare.core.systemd_units import UnitFile
 
 # Where administrators put their own units. It survives SteamOS A/B updates,
@@ -27,9 +27,6 @@ SYSTEM_UNIT_DIRECTORY = Path("/etc/systemd/system")
 
 # Readable by everyone, as systemd and `systemctl cat` expect; writable by root.
 UNIT_FILE_MODE = 0o644
-
-# Changes a path's owner; `os.chown` in production, a recorder in tests.
-ChangeOwner = Callable[[Path, int, int], None]
 
 
 class FileAction(Enum):
@@ -76,6 +73,38 @@ def install_unit_files(
             write_file_atomically(path, unit.content, UNIT_FILE_MODE)
         outcomes.append(UnitFileOutcome(path=path, action=action, backup=backup))
     return outcomes
+
+
+def install_owned_unit_files(
+    units: Iterable[UnitFile],
+    directory: Path,
+    user_id: int,
+    group_id: int,
+    *,
+    change_owner: ChangeOwner = os.chown,
+    now: datetime | None = None,
+    dry_run: bool = False,
+) -> list[UnitFileOutcome]:
+    """Write units into a folder the user owns, such as ~/.config/systemd/user.
+
+    Root writes them (install runs under sudo), so every folder, unit and
+    backup it creates there is then given to the user, who must be able to
+    edit or remove their own units.
+    """
+    if not dry_run:
+        create_owned_directories([directory], user_id, group_id, change_owner=change_owner)
+    outcomes = install_unit_files(units, directory, now=now, dry_run=dry_run)
+    if not dry_run:
+        for outcome in outcomes:
+            for written in _written_paths(outcome):
+                change_owner(written, user_id, group_id)
+    return outcomes
+
+
+def _written_paths(outcome: UnitFileOutcome) -> list[Path]:
+    if outcome.action is FileAction.UNCHANGED:
+        return []
+    return [outcome.path] + ([outcome.backup] if outcome.backup is not None else [])
 
 
 def _decide_unit_file_action(path: Path, content: str) -> FileAction:

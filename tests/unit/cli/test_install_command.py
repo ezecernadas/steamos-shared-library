@@ -1,12 +1,15 @@
 """Tests for the `install` command's wiring, with every system effect faked.
 
-The unit directory is a temporary folder, and root, the partition lookup,
-systemctl, chown, the partition listing and probing, and the console are
-replaced, so the tests run without root and change nothing on the machine.
+The unit directory and the user's home are temporary folders, and root, the
+partition lookup, systemctl (system and user), chown, the partition listing
+and probing, and the console are replaced, so the tests run without root and
+change nothing on the machine. The watch part is tested in detail in
+`test_watch_service_setup`; here only its wiring into install is.
 """
 
 import argparse
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -30,7 +33,7 @@ from steamshare.core.ntfs_partitions import (
 )
 from steamshare.core.systemd_units import DEFAULT_MOUNT_POINT
 
-USER = InvokingUser(user_id=1000, group_id=1000, home=PurePosixPath("/home/player"))
+USER = InvokingUser(user_id=1000, group_id=1000, name="player", home=PurePosixPath("/home/player"))
 EXPECTED_UNITS = [
     "steamshare-ntfs3.service",
     "mnt-steamlib.mount",
@@ -66,7 +69,11 @@ class FakeSystem:
         self.partition_present = True
         self.enable_error: Exception | None = None
         self.is_root = is_root
-        self.user = InvokingUser(user.user_id, user.group_id, PurePosixPath(self.home))
+        self.user = InvokingUser(user.user_id, user.group_id, user.name, PurePosixPath(self.home))
+        self.launcher = tmp_path / "repository" / "steamshare"
+        self.launcher.parent.mkdir()
+        self.launcher.write_text("#!/usr/bin/env bash\n")
+        self.user_commands: list[list[str]] = []
         # Every effect in order, to check that the library folder is created
         # only after the mounts are enabled.
         self.events: list[str] = []
@@ -87,7 +94,21 @@ class FakeSystem:
                 list_partitions=lambda: list(self.contents), probe_partition=self._probe
             ),
             console=Console(ask=self._ask, show=print, is_interactive=self.interactive),
+            launcher=self.launcher,
+            run_command=self._run_user_command,
         )
+
+    @property
+    def steam_root(self) -> Path:
+        return self.home / ".steam" / "steam"
+
+    @property
+    def watch_unit(self) -> Path:
+        return self.home / ".config" / "systemd" / "user" / "steamshare-watch.service"
+
+    def _run_user_command(self, command: Sequence[str]) -> None:
+        self.user_commands.append(list(command))
+        self.events.append(f"user {command[-1]}")
 
     def _enable(self, unit_names: list[str]) -> None:
         if self.enable_error is not None:
@@ -118,6 +139,7 @@ def make_arguments(
     library_folder: str | None = "SteamLibrary",
     mount_point: PurePosixPath = DEFAULT_MOUNT_POINT,
     yes: bool = False,
+    no_watch: bool = False,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         partition_uuid=partition_uuid,
@@ -125,6 +147,9 @@ def make_arguments(
         library_folder=library_folder,
         dry_run=dry_run,
         yes=yes,
+        no_watch=no_watch,
+        steam_root=None,
+        tool="proton_experimental",
     )
 
 
@@ -141,7 +166,7 @@ def test_real_run_writes_units_creates_folders_and_enables_the_mounts(
     assert system.enabled == [EXPECTED_UNITS[1:]]
     output = capsys.readouterr().out
     assert "created" in output
-    assert "steamshare doctor --library /mnt/steamlib/SteamLibrary" in output
+    assert "./steamshare doctor --library /mnt/steamlib/SteamLibrary" in output
 
 
 def test_second_run_reports_every_unit_unchanged(
@@ -186,14 +211,14 @@ def test_refuses_to_run_without_root_and_explains_how(
     assert exit_code == EXIT_FAILURE
     assert list(system.unit_directory.iterdir()) == []
     error = capsys.readouterr().err
-    assert "sudo .venv/bin/python -m steamshare install --partition-uuid 1111AAAA2222BBBB" in error
+    assert "sudo ./steamshare install --partition-uuid 1111AAAA2222BBBB" in error
     assert "--dry-run" in error
 
 
 def test_refuses_to_install_for_root_itself(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    root = InvokingUser(user_id=0, group_id=0, home=PurePosixPath("/root"))
+    root = InvokingUser(user_id=0, group_id=0, name="root", home=PurePosixPath("/root"))
     system = FakeSystem(tmp_path, user=root)
 
     exit_code = install(make_arguments(), system.build())
@@ -339,8 +364,100 @@ def test_without_root_the_hint_repeats_only_the_flags_given(
     install(make_arguments(partition_uuid=None, library_folder=None), system.build())
 
     error = capsys.readouterr().err
-    assert "sudo .venv/bin/python -m steamshare install --mount-point /mnt/steamlib" in error
+    assert "sudo ./steamshare install --mount-point /mnt/steamlib" in error
     assert "--partition-uuid" not in error
+
+
+# --- The watch part ----------------------------------------------------------
+
+
+def test_with_steam_installed_the_watch_service_is_set_up_after_the_mounts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = FakeSystem(tmp_path)
+    system.steam_root.mkdir(parents=True)
+
+    exit_code = install(make_arguments(), system.build())
+
+    assert exit_code == EXIT_OK
+    user_events = [event for event in system.events if event.startswith("user ")]
+    assert user_events == ["user daemon-reload", "user steamshare-watch.service"]
+    assert system.events.index("enable") < system.events.index(user_events[0])
+    assert system.user_commands[0][:3] == ["systemctl", "--user", "--machine=player@"]
+    assert f"ExecStart={system.launcher} watch" in system.watch_unit.read_text()
+    assert (system.steam_root / ".cef-enable-remote-debugging").exists()
+    output = capsys.readouterr().out
+    assert output.rstrip().splitlines()[-1].startswith("Next step:")
+
+
+def test_the_summary_shows_the_watch_part_before_asking(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = FakeSystem(tmp_path)
+    system.steam_root.mkdir(parents=True)
+    system.interactive = True
+    system.answers = ["n"]
+
+    exit_code = install(make_arguments(), system.build())
+
+    assert exit_code == EXIT_FAILURE
+    assert not system.watch_unit.exists()
+    output = capsys.readouterr().out
+    assert f"  Watch service:  {system.watch_unit} (user player)" in output
+    assert output.index("Watch service:") < output.index("Steam debugger:")
+
+
+def test_without_steam_the_mounts_are_installed_and_the_watch_part_says_what_to_do(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = FakeSystem(tmp_path)
+
+    exit_code = install(make_arguments(), system.build())
+
+    assert exit_code == EXIT_OK
+    assert system.enabled == [EXPECTED_UNITS[1:]]
+    assert system.user_commands == []
+    output = capsys.readouterr().out
+    assert "Watch service skipped: Steam has never run for player" in output
+    assert "run Steam once as player, then run `sudo ./steamshare install` again" in output
+
+
+def test_no_watch_installs_only_the_mounts(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = FakeSystem(tmp_path)
+    system.steam_root.mkdir(parents=True)
+
+    exit_code = install(make_arguments(no_watch=True), system.build())
+
+    assert exit_code == EXIT_OK
+    assert system.user_commands == []
+    assert not system.watch_unit.exists()
+    assert "Watch service:  skipped (--no-watch was given)" in capsys.readouterr().out
+
+
+def test_dry_run_shows_the_watch_service_running_the_launcher(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = FakeSystem(tmp_path, is_root=False)
+    system.steam_root.mkdir(parents=True)
+
+    exit_code = install(make_arguments(dry_run=True), system.build())
+
+    assert exit_code == EXIT_OK
+    assert not system.watch_unit.parent.exists()
+    assert system.user_commands == []
+    output = capsys.readouterr().out
+    assert f"ExecStart={system.launcher} watch --library /mnt/steamlib/SteamLibrary" in output
+    assert ".venv" not in output
+
+
+def test_install_has_a_no_watch_flag_and_no_separate_watch_installer() -> None:
+    arguments = build_parser().parse_args(["install", "--no-watch"])
+
+    assert arguments.no_watch is True
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["install-watch"])
 
 
 # --- Argument validation -----------------------------------------------------

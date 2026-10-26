@@ -14,10 +14,15 @@ rule 5 is implemented once:
 
 import os
 import shutil
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
 BACKUP_TIMESTAMP_FORMAT = "%Y%m%d-%H%M%S"
+
+# Changes a path's owner; `os.chown` in production, a recorder in tests. A
+# file root writes on the user's behalf belongs to root until this runs.
+ChangeOwner = Callable[[Path, int, int], None]
 
 
 def back_up_file(path: Path, now: datetime) -> Path:

@@ -11,6 +11,7 @@ from pathlib import Path
 from steamshare.adapters.unit_installer import (
     FileAction,
     create_owned_directories,
+    install_owned_unit_files,
     install_unit_files,
 )
 from steamshare.core.systemd_units import UnitFile
@@ -132,4 +133,71 @@ def test_dry_run_creates_no_folder(tmp_path: Path) -> None:
 
     assert outcome.action is FileAction.CREATED
     assert not (tmp_path / "steam-shared").exists()
+    assert chown.calls == []
+
+
+# --- Unit files the user owns ------------------------------------------------
+
+
+def test_owned_unit_files_and_their_new_folders_are_given_to_the_user(tmp_path: Path) -> None:
+    unit_directory = tmp_path / "home" / ".config" / "systemd" / "user"
+    (tmp_path / "home").mkdir()
+    chown = RecordingChown()
+
+    [outcome] = install_owned_unit_files(
+        [make_unit("new\n", "w.service")], unit_directory, 1000, 1000, change_owner=chown, now=NOW
+    )
+
+    assert outcome.action is FileAction.CREATED
+    assert outcome.path.read_text() == "new\n"
+    assert chown.calls == [
+        (tmp_path / "home" / ".config", 1000, 1000),
+        (tmp_path / "home" / ".config" / "systemd", 1000, 1000),
+        (unit_directory, 1000, 1000),
+        (unit_directory / "w.service", 1000, 1000),
+    ]
+
+
+def test_an_updated_owned_unit_and_its_backup_are_given_to_the_user(tmp_path: Path) -> None:
+    (tmp_path / "w.service").write_text("old\n")
+    chown = RecordingChown()
+
+    [outcome] = install_owned_unit_files(
+        [make_unit("new\n", "w.service")], tmp_path, 1000, 1000, change_owner=chown, now=NOW
+    )
+
+    assert outcome.action is FileAction.UPDATED
+    assert chown.calls == [
+        (tmp_path / "w.service", 1000, 1000),
+        (tmp_path / f"w.service{BACKUP_SUFFIX}", 1000, 1000),
+    ]
+
+
+def test_an_unchanged_owned_unit_is_left_alone(tmp_path: Path) -> None:
+    (tmp_path / "w.service").write_text("same\n")
+    chown = RecordingChown()
+
+    [outcome] = install_owned_unit_files(
+        [make_unit("same\n", "w.service")], tmp_path, 1000, 1000, change_owner=chown, now=NOW
+    )
+
+    assert outcome.action is FileAction.UNCHANGED
+    assert chown.calls == []
+
+
+def test_a_dry_run_of_owned_units_writes_and_gives_away_nothing(tmp_path: Path) -> None:
+    unit_directory = tmp_path / "systemd" / "user"
+    chown = RecordingChown()
+
+    [outcome] = install_owned_unit_files(
+        [make_unit("new\n", "w.service")],
+        unit_directory,
+        1000,
+        1000,
+        change_owner=chown,
+        dry_run=True,
+    )
+
+    assert outcome.action is FileAction.CREATED
+    assert not (tmp_path / "systemd").exists()
     assert chown.calls == []

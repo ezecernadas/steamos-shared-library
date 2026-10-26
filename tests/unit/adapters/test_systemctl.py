@@ -3,9 +3,11 @@
 from collections.abc import Sequence
 
 from steamshare.adapters.systemctl import (
-    USER_SYSTEMCTL,
     enable_units_now,
     plan_enable_commands,
+    plan_restart_commands,
+    run_commands,
+    user_systemctl,
 )
 
 
@@ -27,16 +29,26 @@ def test_enabling_runs_the_planned_commands_in_order() -> None:
     assert commands == plan_enable_commands(["a.mount"])
 
 
-def test_user_units_go_through_the_users_own_systemd() -> None:
-    assert plan_enable_commands(["w.service"], systemctl=USER_SYSTEMCTL) == [
-        ["systemctl", "--user", "daemon-reload"],
-        ["systemctl", "--user", "enable", "--now", "w.service"],
+def test_a_users_units_go_through_that_users_own_manager_even_from_root() -> None:
+    assert plan_enable_commands(["w.service"], systemctl=user_systemctl("player")) == [
+        ["systemctl", "--user", "--machine=player@", "daemon-reload"],
+        ["systemctl", "--user", "--machine=player@", "enable", "--now", "w.service"],
     ]
 
 
-def test_enabling_user_units_runs_the_user_commands() -> None:
+def test_changed_units_are_restarted_so_they_run_their_new_command() -> None:
+    assert plan_restart_commands(["w.service"], systemctl=user_systemctl("player")) == [
+        ["systemctl", "--user", "--machine=player@", "restart", "w.service"],
+    ]
+
+
+def test_nothing_is_restarted_when_nothing_changed() -> None:
+    assert plan_restart_commands([], systemctl=user_systemctl("player")) == []
+
+
+def test_planned_commands_run_in_order() -> None:
     commands: list[list[str]] = []
 
-    enable_units_now(["w.service"], run=commands.append, systemctl=USER_SYSTEMCTL)
+    run_commands([["a"], ["b", "c"]], run=commands.append)
 
-    assert commands == plan_enable_commands(["w.service"], systemctl=USER_SYSTEMCTL)
+    assert commands == [["a"], ["b", "c"]]

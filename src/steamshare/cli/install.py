@@ -1,10 +1,14 @@
-"""The `install` command: mount the shared library at every boot.
+"""The `install` command: everything the shared library needs, in one run with sudo.
 
 It settles the partition and library folder (asking, unless flags give them;
 see `install_choices`), writes the units from `core.systemd_units` into
 /etc/systemd/system, creates the ext4 folders they bind-mount, and enables
-the mounts. Every effect on the machine goes through `System`, so the wiring
-below is tested without root and without touching the machine.
+the mounts. Then, unless `--no-watch` is given, it sets up the `watch` user
+service for the desktop user who ran sudo (see `watch_service_setup`).
+
+The summary shown before asking to proceed covers both parts. Every effect
+on the machine goes through `System`, so the wiring below is tested without
+root and without touching the machine.
 """
 
 import argparse
@@ -20,11 +24,17 @@ from pathlib import Path, PurePosixPath
 from steamshare.adapters.block_devices import read_ntfs_partitions
 from steamshare.adapters.console import Console, terminal_console
 from steamshare.adapters.invoking_user import InvokingUser, resolve_invoking_user
+from steamshare.adapters.launcher_location import LAUNCHER_PATH
 from steamshare.adapters.partition_inspector import PartitionCleanupError, probe_partition
-from steamshare.adapters.systemctl import enable_units_now, plan_enable_commands
+from steamshare.adapters.safe_writes import ChangeOwner
+from steamshare.adapters.systemctl import (
+    CommandRunner,
+    enable_units_now,
+    plan_enable_commands,
+    run_command,
+)
 from steamshare.adapters.unit_installer import (
     SYSTEM_UNIT_DIRECTORY,
-    ChangeOwner,
     DirectoryOutcome,
     create_owned_directories,
     install_unit_files,
@@ -40,12 +50,22 @@ from steamshare.cli.install_choices import (
 )
 from steamshare.cli.shared import (
     DONE_ACTION_LABELS,
+    LAUNCHER_COMMAND,
     PLANNED_ACTION_LABELS,
     ROOT_USER_ID,
+    SUDO_INSTALL_COMMAND,
     absolute_path,
     format_outcome,
     relative_folder,
 )
+from steamshare.cli.watch_service_setup import (
+    NO_WATCH_FLAG,
+    apply_watch_service,
+    format_watch_summary,
+    plan_watch_service,
+    preview_watch_service,
+)
+from steamshare.core.proton_mapping import DEFAULT_PROTON_TOOL
 from steamshare.core.systemd_units import (
     DEFAULT_MOUNT_POINT,
     InstallConfig,
@@ -57,11 +77,6 @@ from steamshare.core.systemd_units import (
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
-
-
-# Under sudo, root's PATH usually has no `uv`, so the hint calls the
-# project's virtual environment directly, from the repository root.
-SUDO_COMMAND_PREFIX = "sudo .venv/bin/python -m steamshare install"
 
 
 @dataclass(frozen=True)
@@ -76,14 +91,20 @@ class System:
     change_owner: ChangeOwner
     discovery: Discovery
     console: Console
+    # The script the watch service runs steamshare through.
+    launcher: Path
+    # Runs the systemctl commands for the user's own service manager.
+    run_command: CommandRunner
 
 
 def add_parser(subcommands: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
     parser = subcommands.add_parser(
         "install",
-        help="install the systemd units that mount the shared library at boot",
+        help="mount the shared library at boot and set up the watch service (run with sudo)",
         description="Without flags, install lists the NTFS partitions and asks which one "
-        "holds the library. Each flag given skips its question.",
+        "holds the library. Each flag given skips its question. It also sets up the watch "
+        "user service for the user who ran sudo, unless --no-watch is given. Running it "
+        "again changes only what is out of date.",
     )
     parser.add_argument(
         "--partition-uuid",
@@ -100,6 +121,24 @@ def add_parser(subcommands: "argparse._SubParsersAction[argparse.ArgumentParser]
         type=relative_folder,
         help="the folder on the partition that contains steamapps, such as SteamLibrary; "
         "created after mounting if it is missing (found on the partition if left out)",
+    )
+    parser.add_argument(
+        NO_WATCH_FLAG,
+        dest="no_watch",
+        action="store_true",
+        help="install only the mounts, without the watch service that forces Proton live",
+    )
+    parser.add_argument(
+        "--steam-root",
+        type=Path,
+        help="the Steam install folder, for the watch service (default: ~/.steam/steam of "
+        "the user who ran sudo; for the Flatpak, "
+        "~/.var/app/com.valvesoftware.Steam/.local/share/Steam)",
+    )
+    parser.add_argument(
+        "--tool",
+        default=DEFAULT_PROTON_TOOL,
+        help=f"the compatibility tool the watch service forces (default: {DEFAULT_PROTON_TOOL})",
     )
     parser.add_argument(
         "--yes",
@@ -129,6 +168,8 @@ def run(arguments: argparse.Namespace) -> int:
             probe_partition=functools.partial(probe_partition, can_mount=is_root),
         ),
         console=terminal_console(),
+        launcher=LAUNCHER_PATH,
+        run_command=run_command,
     )
     return install(arguments, system)
 
@@ -137,14 +178,30 @@ def install(arguments: argparse.Namespace, system: System) -> int:
     try:
         config, choices = build_config(arguments, system)
         units = build_units(config)
-        summary = format_summary(choices, config.mount_point, [unit.name for unit in units])
+        watch = plan_watch_service(
+            skip=arguments.no_watch,
+            user=system.invoking_user,
+            library=_library_path(config),
+            tool=arguments.tool,
+            steam_root=arguments.steam_root,
+            launcher=system.launcher,
+        )
+        summary = [
+            *format_summary(choices, config.mount_point, [unit.name for unit in units]),
+            *format_watch_summary(watch),
+        ]
         confirm_install(
             summary, system.console, assume_yes=arguments.yes, dry_run=arguments.dry_run
         )
         if arguments.dry_run:
             preview_install(config, choices, units, system)
+            preview_watch_service(watch)
         else:
             apply_install(config, choices, units, system)
+            apply_watch_service(
+                watch, change_owner=system.change_owner, run_command=system.run_command
+            )
+            _print_next_step(config)
     except (InstallError, PartitionCleanupError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return EXIT_FAILURE
@@ -185,15 +242,18 @@ def _needs_root_message(arguments: argparse.Namespace) -> str:
         ("--partition-uuid", arguments.partition_uuid),
         ("--mount-point", arguments.mount_point),
         ("--library-folder", arguments.library_folder),
+        ("--steam-root", arguments.steam_root),
+        ("--tool", None if arguments.tool == DEFAULT_PROTON_TOOL else arguments.tool),
     ]
+    given_switches = [(NO_WATCH_FLAG, arguments.no_watch), ("--yes", arguments.yes)]
     install_arguments = shlex.join(
         [part for flag, value in given_flags if value is not None for part in (flag, str(value))]
-        + (["--yes"] if arguments.yes else [])
+        + [switch for switch, given in given_switches if given]
     )
     return (
         f"install writes to {SYSTEM_UNIT_DIRECTORY}, so it needs root. "
         "From the repository root, run:\n"
-        f"  {SUDO_COMMAND_PREFIX} {install_arguments}\n"
+        f"  {SUDO_INSTALL_COMMAND} {install_arguments}\n"
         "To see what it would do first, add --dry-run (no root needed)."
     )
 
@@ -245,9 +305,13 @@ def apply_install(
 
     if choices.create_library_folder:
         _create_library_folder(config, system)
+
+
+def _print_next_step(config: InstallConfig) -> None:
+    library = shlex.quote(str(_library_path(config)))
     print(
-        "Next step: check the setup as your desktop user with "
-        f"`uv run python -m steamshare doctor --library {shlex.quote(str(_library_path(config)))}`."
+        "Next step: check the setup as your desktop user (without sudo), from the "
+        f"repository folder: `{LAUNCHER_COMMAND} doctor --library {library}`."
     )
 
 
