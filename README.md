@@ -45,24 +45,6 @@ steamshare fixes all three, and nothing more. The game files stay exactly as Ste
 
 ## How it works
 
-```mermaid
-flowchart LR
-    subgraph NTFS["Shared NTFS partition"]
-        games["SteamLibrary/steamapps/common<br/>Windows build of every game"]
-        cd["steamapps/compatdata"]
-        sc["steamapps/shadercache"]
-    end
-    subgraph EXT4["Linux ext4 partition"]
-        realcd["~/.local/share/steam-shared/compatdata<br/>Proton prefixes, c: and all"]
-        realsc["~/.local/share/steam-shared/shadercache"]
-    end
-    win["Windows Steam"] -->|runs natively| games
-    lin["Linux Steam + Proton"] -->|runs through Proton| games
-    cd -. bind mount .-> realcd
-    sc -. bind mount .-> realsc
-    watch["steamshare watch"] -->|forces Proton per game| lin
-```
-
 On Linux, `install` writes systemd units that run at every boot:
 
 | Piece | What it does | Why |
