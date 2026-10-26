@@ -2,6 +2,17 @@
 
 These rules apply to all code in this repository.
 
+## 0. Clean, scalable, and easy to understand
+
+This rule overrides convenience. A reader new to the project should understand any module by reading it once.
+
+- **Names carry the meaning.** Functions say what they do (`find_invalid_windows_names`, not `check`), and variables say what they hold. Avoid abbreviations unless they are domain terms (`vdf`, `acf`, `ntfs`).
+- **Small units, one job each.** A function does one thing. If it needs an "and" to describe it, split it.
+- **Comments explain why, not what.** The code shows what happens. A comment explains the reason, the constraint, or the trap. Typical examples: why NTFS rejects a name, why Steam must be closed, which Steam behavior a workaround targets. Each module starts with a docstring that explains its purpose and where it fits.
+- **Domain knowledge lives in one place.** Rules such as Windows-reserved names or Steam file layouts are defined once, as named constants with a comment pointing to the source, and reused everywhere.
+- **Built to grow.** New behavior is added by adding a unit (a new rule, a new adapter, a new check for `doctor`), not by adding branches to an existing function.
+- **No cleverness.** Prefer the obvious version over the shortest one.
+
 ## 1. No third-party runtime dependencies
 
 SteamOS has a read-only root filesystem. Packages installed with `pacman` or a system-wide `pip install` either fail or are wiped by the next OS update. At runtime, the tools may only use:
