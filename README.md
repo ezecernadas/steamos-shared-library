@@ -31,7 +31,7 @@ sudo ./steamshare install
   - **The watch service.** For the user who ran sudo, it turns on Steam's local debugger and enables the `steamshare-watch` user service. With Steam open, the service forces Proton on games that ship a native Linux build, so installing one into the shared library fetches its Windows build. Restart Steam once afterwards so it turns the debugger on, and set the shared library as the default in Steam (Settings → Storage → Make default): then a click on Install is all it takes. If Steam has never run, this part is skipped; run Steam once, then run install again.
   - The service runs `./steamshare` from this folder, so keep the repository where it is. After moving it, run install again.
   - Running it again is safe: it changes only what is out of date, and backs up a unit before replacing it.
-  - `--dry-run` shows the plan and changes nothing; it does not need sudo.
+  - `--dry-run` shows the plan and changes nothing; it does not need sudo. Add `--show-units` to also print the full text of every unit file.
   - `--no-watch` installs only the mounts.
   - `--partition-uuid`, `--library-folder`, `--mount-point` (default `/mnt/steamlib`) and `--yes` skip the questions, for scripts. `--steam-root` names a Steam installed elsewhere, such as the Flatpak.
 - **`./steamshare doctor --library <library>`** checks the whole setup. Use the library path that install printed.

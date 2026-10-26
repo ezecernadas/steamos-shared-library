@@ -167,7 +167,12 @@ def add_parser(subcommands: "argparse._SubParsersAction[argparse.ArgumentParser]
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="print the units and planned changes without writing anything",
+        help="print the planned changes without writing anything",
+    )
+    parser.add_argument(
+        "--show-units",
+        action="store_true",
+        help="with --dry-run, also print the full text of every unit file",
     )
     parser.set_defaults(run=run)
 
@@ -219,8 +224,10 @@ def install(arguments: argparse.Namespace, system: System) -> int:
             dry_run=arguments.dry_run,
         )
         if arguments.dry_run:
-            mounts_notes = preview_install(config, choices, units, system, report)
-            watch_notes = preview_watch_service(watch, report)
+            mounts_notes = preview_install(
+                config, choices, units, system, report, show_units=arguments.show_units
+            )
+            watch_notes = preview_watch_service(watch, report, show_units=arguments.show_units)
         else:
             # One timestamp for the whole run, so every backup it makes shares
             # one suffix and the report can name it once.
@@ -292,18 +299,28 @@ def _needs_root_message(arguments: argparse.Namespace) -> str:
     )
 
 
+SHOW_UNITS_HINT = "Add --show-units to print the unit files."
+
+
 def preview_install(
     config: InstallConfig,
     choices: InstallChoices,
     units: list[UnitFile],
     system: System,
     report: RunReport,
+    *,
+    show_units: bool,
 ) -> ClosingNotes:
     print(DRY_RUN_HEADER)
+    # The unit files are long, and most people only need the planned changes,
+    # so their full text is opt-in.
+    if not show_units:
+        print(SHOW_UNITS_HINT)
     print()
-    for unit in units:
-        print(f"--- {system.unit_directory / unit.name}")
-        print(unit.content)
+    if show_units:
+        for unit in units:
+            print(f"--- {system.unit_directory / unit.name}")
+            print(unit.content)
     print(report.section(MOUNTS_SECTION_TITLE, system.unit_directory))
     unit_outcomes = install_unit_files(units, system.unit_directory, dry_run=True)
     for outcome in unit_outcomes:

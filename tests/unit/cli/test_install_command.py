@@ -142,6 +142,7 @@ def make_arguments(
     mount_point: PurePosixPath = DEFAULT_MOUNT_POINT,
     yes: bool = False,
     no_watch: bool = False,
+    show_units: bool = False,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         partition_uuid=partition_uuid,
@@ -150,6 +151,7 @@ def make_arguments(
         dry_run=dry_run,
         yes=yes,
         no_watch=no_watch,
+        show_units=show_units,
         steam_root=None,
         tool="proton_experimental",
     )
@@ -185,7 +187,7 @@ def test_second_run_reports_every_unit_unchanged(
     assert "created" not in output
 
 
-def test_dry_run_prints_every_unit_and_changes_nothing(
+def test_dry_run_lists_every_unit_and_changes_nothing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     system = FakeSystem(tmp_path, is_root=False)
@@ -199,7 +201,6 @@ def test_dry_run_prints_every_unit_and_changes_nothing(
     output = capsys.readouterr().out
     for name in EXPECTED_UNITS:
         assert name in output
-    assert "Options=uid=1000,gid=1000,umask=022,windows_names,nofail" in output
     assert "systemctl enable --now mnt-steamlib.mount" in output
 
 
@@ -349,9 +350,8 @@ def test_a_dry_run_reports_the_same_sections_with_would_verbs(
         "mnt-steamlib-SteamLibrary-steamapps-compatdata.mount "
         "mnt-steamlib-SteamLibrary-steamapps-shadercache.mount",
         "",
-        "--- ~/.config/systemd/user/steamshare-watch.service",
+        "Watch service  (~/.config/systemd/user)",
     ]
-    assert "Watch service  (~/.config/systemd/user)" in output
     closing = output.split("Nothing was changed. After a real install, the next steps are:\n")
     assert closing[1].splitlines()[1].startswith("  2. In Steam: Settings → Storage")
     assert "Done." not in output
@@ -539,13 +539,43 @@ def test_no_watch_installs_only_the_mounts(
     assert "  Watch service  skipped (--no-watch was given)" in capsys.readouterr().out
 
 
+def test_a_dry_run_hides_the_unit_files_and_says_how_to_see_them(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = FakeSystem(tmp_path, is_root=False)
+    system.steam_root.mkdir(parents=True)
+
+    install(make_arguments(dry_run=True), system.build())
+
+    output = capsys.readouterr().out
+    assert "[Unit]" not in output
+    assert "--- " not in output
+    assert "Add --show-units to print the unit files.\n" in output
+
+
+def test_show_units_prints_every_unit_file_in_a_dry_run(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = FakeSystem(tmp_path, is_root=False)
+    system.steam_root.mkdir(parents=True)
+
+    install(make_arguments(dry_run=True, show_units=True), system.build())
+
+    output = capsys.readouterr().out
+    for name in EXPECTED_UNITS:
+        assert f"--- {system.unit_directory / name}\n" in output
+    assert "--- ~/.config/systemd/user/steamshare-watch.service\n" in output
+    assert "Options=uid=1000,gid=1000,umask=022,windows_names,nofail" in output
+    assert "--show-units" not in output
+
+
 def test_dry_run_shows_the_watch_service_running_the_launcher(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     system = FakeSystem(tmp_path, is_root=False)
     system.steam_root.mkdir(parents=True)
 
-    exit_code = install(make_arguments(dry_run=True), system.build())
+    exit_code = install(make_arguments(dry_run=True, show_units=True), system.build())
 
     assert exit_code == EXIT_OK
     assert not system.watch_unit.parent.exists()
@@ -553,6 +583,11 @@ def test_dry_run_shows_the_watch_service_running_the_launcher(
     output = capsys.readouterr().out
     assert f"ExecStart={system.launcher} watch --library /mnt/steamlib/SteamLibrary" in output
     assert ".venv" not in output
+
+
+def test_install_has_a_show_units_flag() -> None:
+    assert build_parser().parse_args(["install", "--show-units"]).show_units is True
+    assert build_parser().parse_args(["install"]).show_units is False
 
 
 def test_install_has_a_no_watch_flag_and_no_separate_watch_installer() -> None:

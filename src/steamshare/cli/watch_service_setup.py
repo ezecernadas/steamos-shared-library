@@ -170,12 +170,18 @@ def watch_summary_field(watch: WatchService) -> tuple[str, str]:
     return SECTION_TITLE, f"for user {watch.user.name}"
 
 
-def preview_watch_service(watch: WatchService, report: RunReport) -> ClosingNotes:
-    """Print what the watch part would change, changing nothing."""
+def preview_watch_service(
+    watch: WatchService, report: RunReport, *, show_units: bool
+) -> ClosingNotes:
+    """Print what the watch part would change, changing nothing.
+
+    The unit file's full text is printed only when `show_units` asks for it.
+    """
     if isinstance(watch, WatchServiceSkipped):
         return _report_skipped(watch, report)
-    print(f"--- {report.path(watch.unit_directory / watch.unit.name)}")
-    print(watch.unit.content)
+    if show_units:
+        print(f"--- {report.path(watch.unit_directory / watch.unit.name)}")
+        print(watch.unit.content)
     print(report.section(SECTION_TITLE, watch.unit_directory))
     flag_is_new = _turn_on_debugger(watch, change_owner=_no_owner_change_in_a_dry_run, dry_run=True)
     print(_flag_file_line(watch, flag_is_new, report))

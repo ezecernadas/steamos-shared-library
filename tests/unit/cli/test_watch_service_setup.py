@@ -77,8 +77,8 @@ class Setup:
             now=datetime(2026, 10, 26, 18, 31, 31),
         )
 
-    def preview(self) -> ClosingNotes:
-        return preview_watch_service(self.plan(), self.report(dry_run=True))
+    def preview(self, *, show_units: bool = False) -> ClosingNotes:
+        return preview_watch_service(self.plan(), self.report(dry_run=True), show_units=show_units)
 
     def _change_owner(self, path: Path, user_id: int, group_id: int) -> None:
         assert (user_id, group_id) == (1000, 1000)
@@ -174,7 +174,7 @@ def test_a_dry_run_prints_the_plan_and_changes_nothing(
     assert not setup.flag_file.exists()
     assert not setup.unit_file.parent.exists()
     output = capsys.readouterr().out
-    assert "Restart=on-failure" in output
+    assert "Restart=on-failure" not in output
     section = output[output.index("Watch service  (~/.config/systemd/user)") :].splitlines()
     assert section == [
         "Watch service  (~/.config/systemd/user)",
@@ -210,6 +210,16 @@ def test_a_dry_run_leaves_the_same_next_steps_as_a_real_run(setup: Setup) -> Non
 
     assert planned.next_steps == done.next_steps
     assert planned.tips == done.tips
+
+
+def test_a_dry_run_prints_the_unit_file_only_when_asked(
+    setup: Setup, capsys: pytest.CaptureFixture[str]
+) -> None:
+    setup.preview(show_units=True)
+
+    output = capsys.readouterr().out
+    assert output.startswith("--- ~/.config/systemd/user/steamshare-watch.service\n")
+    assert "Restart=on-failure" in output
 
 
 # --- Applying ----------------------------------------------------------------
