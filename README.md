@@ -202,6 +202,20 @@ Start with `./steamshare doctor --library <path>`. Every failure it reports incl
 
 ## FAQ
 
+**Aren't games on NTFS slow on Linux?**
+Not with the driver steamshare uses. The reputation comes from `ntfs-3g`, the FUSE driver many distros mount NTFS with by default, which runs outside the kernel and is noticeably slower. steamshare mounts with the in-kernel `ntfs3` driver instead. Two other causes of "slow" libraries are also handled: Proton prefixes on NTFS, whose errors and retries feel like slowness, and Fast Startup, which leaves the drive read-only.
+
+Measured on one NVMe SSD, NTFS (`ntfs3`) and ext4 partitions side by side, with the page cache dropped before each test (median of 3 runs):
+
+| Read pattern | NTFS (`ntfs3`) | ext4 |
+|---|---|---|
+| One 2 GB file, sequential | 1198 MB/s | 1268 MB/s |
+| Random 64 KB reads in a large file | 6421 /s | 5650 /s |
+| 5000 small files, opened and read | 7207 /s | 6827 /s |
+| `stat` on those files | 364k /s | 366k /s |
+
+The differences are small and go both ways. These are filesystem numbers, not game loading times, and a spinning hard drive may behave differently.
+
 **Why not exFAT?**
 It has no symlinks, which Proton needs, and Steam does not support it as a library on Linux.
 
