@@ -9,7 +9,7 @@ from pathlib import PurePosixPath
 
 import pytest
 
-from steamshare.core.library_layout import LibraryEntry, is_inside_linux_tool
+from steamshare.core.library_layout import LibraryEntry, count_proton_prefixes, is_inside_linux_tool
 
 
 def make_entry(relative_path: str) -> LibraryEntry:
@@ -42,3 +42,8 @@ def test_recognizes_paths_inside_linux_tools(relative_path: str) -> None:
 )
 def test_rejects_paths_outside_linux_tools(relative_path: str) -> None:
     assert not is_inside_linux_tool(make_entry(relative_path))
+
+
+def test_proton_prefixes_are_counted_by_their_appid_folders() -> None:
+    # Proton names each prefix after its game's appid; anything else is not one.
+    assert count_proton_prefixes(["1005870", "48000", "pfx-backup", "tmp"]) == 2

@@ -6,6 +6,8 @@ real generated content, with no file on disk.
 
 from pathlib import PurePosixPath
 
+from steamshare.core.live_proton_mapping import CompatToolSetting, OwnedGame
+from steamshare.core.mapping_cleanup import MappingCleanup
 from steamshare.core.systemd_units import (
     InstallConfig,
     WatchServiceConfig,
@@ -13,13 +15,17 @@ from steamshare.core.systemd_units import (
     render_watch_service,
 )
 from steamshare.core.uninstall_plan import (
+    ClearProtonMappings,
     DisableUnit,
+    FolderSize,
     InstalledUnit,
     ReloadManager,
     RemoveFile,
     RemoveFolderIfEmpty,
+    RemoveTree,
     ServiceManager,
     StopUnit,
+    UncheckedMappings,
     UninstallFacts,
     build_uninstall_plan,
     enablement_links,
@@ -243,3 +249,96 @@ def test_the_enablement_link_is_in_the_wants_folder_of_each_wanted_by_target() -
     assert enablement_links(watch_unit()) == (
         USER_UNIT_DIRECTORY / "default.target.wants" / "steamshare-watch.service",
     )
+
+
+# --- Purge -------------------------------------------------------------------
+
+DATA = PurePosixPath("/home/player/.local/share/steam-shared")
+DATA_ON_DISK = (
+    FolderSize(DATA / "compatdata", 2_000_000_000),
+    FolderSize(DATA / "shadercache", 300_000_000),
+)
+NOT_INSTALLED = OwnedGame("1", "One", False, None, CompatToolSetting("proton_experimental", 250))
+INSTALLED = OwnedGame("2", "Two", True, None, CompatToolSetting("proton_experimental", 250))
+CLEANUP = MappingCleanup(to_clear=(NOT_INSTALLED,), kept_installed=(INSTALLED,))
+
+
+def purge_facts(*, mappings: MappingCleanup | UncheckedMappings | None = CLEANUP) -> UninstallFacts:
+    return UninstallFacts(
+        system_units=system_units(),
+        watch_unit=watch_unit(),
+        state_file=STATE_FILE,
+        debugger_flag=DEBUGGER_FLAG,
+        remove_debugger_flag=True,
+        purge=True,
+        data_folders_on_disk=DATA_ON_DISK,
+        mappings=mappings,
+    )
+
+
+def test_purge_stops_watch_then_clears_mappings_before_the_state_goes() -> None:
+    plan = build_uninstall_plan(purge_facts())
+
+    # watch would map the games again if it were still running, and the
+    # clear needs the state file to know which mappings are steamshare's.
+    assert plan.watch_actions == (
+        DisableUnit(USER, "steamshare-watch.service"),
+        RemoveFile(watch_unit().path),
+        ReloadManager(USER),
+        ClearProtonMappings(CLEANUP),
+        RemoveFile(STATE_FILE),
+        RemoveFolderIfEmpty(STATE_FILE.parent),
+    )
+
+
+def test_purge_deletes_the_data_and_the_flag_last() -> None:
+    plan = build_uninstall_plan(purge_facts())
+
+    assert plan.purge_actions == (
+        RemoveTree(DATA / "compatdata", 2_000_000_000),
+        RemoveTree(DATA / "shadercache", 300_000_000),
+        RemoveFolderIfEmpty(DATA),
+        RemoveFile(DEBUGGER_FLAG),
+    )
+    assert plan.kept_data_folders == ()
+    assert plan.kept_debugger_flag is None
+    assert plan.removed_debugger_flag == DEBUGGER_FLAG
+
+
+def test_purge_keeps_the_mappings_of_installed_games() -> None:
+    plan = build_uninstall_plan(purge_facts())
+
+    assert plan.kept_installed_mappings == (INSTALLED,)
+
+
+def test_mappings_not_checked_in_a_dry_run_are_planned_by_their_count() -> None:
+    plan = build_uninstall_plan(purge_facts(mappings=UncheckedMappings(managed_count=141)))
+
+    assert ClearProtonMappings(UncheckedMappings(managed_count=141)) in plan.watch_actions
+    assert plan.kept_installed_mappings == ()
+
+
+def test_purge_with_steam_settings_kept_or_nothing_to_clear_asks_steam_nothing() -> None:
+    nothing_to_clear = MappingCleanup(to_clear=(), kept_installed=(INSTALLED,))
+
+    for mappings in (None, nothing_to_clear, UncheckedMappings(managed_count=0)):
+        plan = build_uninstall_plan(purge_facts(mappings=mappings))
+        assert not any(isinstance(a, ClearProtonMappings) for a in plan.watch_actions)
+
+
+def test_a_data_folder_missing_on_disk_is_not_purged() -> None:
+    facts = purge_facts()
+    facts = UninstallFacts(**{**facts.__dict__, "data_folders_on_disk": DATA_ON_DISK[:1]})
+
+    plan = build_uninstall_plan(facts)
+
+    assert plan.purge_actions[:2] == (
+        RemoveTree(DATA / "compatdata", 2_000_000_000),
+        RemoveFolderIfEmpty(DATA),
+    )
+
+
+def test_without_purge_there_are_no_purge_actions() -> None:
+    plan = build_uninstall_plan(facts(system=system_units(), debugger_flag=DEBUGGER_FLAG))
+
+    assert plan.purge_actions == ()

@@ -24,6 +24,13 @@ What it keeps, on purpose:
   other tools such as Decky Loader may rely on it;
 - this repository and the files on the NTFS partition.
 
+`--purge` goes further, for users who want everything gone: it also
+deletes the ext4 Proton prefixes and shader caches, and Steam's debugger
+flag, and clears in Steam the Proton choices steamshare made for games that
+are not installed (`steam_settings_cleanup`). It still keeps the choices of
+installed games, since clearing those would re-download them as Linux
+builds. Its order and why are in `core.uninstall_plan`.
+
 The user's service manager runs only while the user is logged in. When it
 cannot be reached, the watch service's file is still removed, the system
 part still runs, and the report says what is left to do. Every effect on
@@ -31,6 +38,7 @@ the machine goes through `System`, so the wiring is tested without root.
 """
 
 import argparse
+import dataclasses
 import os
 import shlex
 import subprocess
@@ -41,10 +49,12 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from steamshare.adapters.console import Console, terminal_console
+from steamshare.adapters.folder_contents import folder_size, remove_tree, subfolder_names
 from steamshare.adapters.generated_units import find_generated_unit, find_generated_units
 from steamshare.adapters.invoking_user import InvokingUser, resolve_invoking_user
 from steamshare.adapters.state_file import state_file_path
 from steamshare.adapters.steam_cdp import remote_debugging_flag_path
+from steamshare.adapters.steam_client_api import connect_to_steam_client
 from steamshare.adapters.steam_config import default_steam_root
 from steamshare.adapters.systemctl import (
     SYSTEM_SYSTEMCTL,
@@ -56,7 +66,7 @@ from steamshare.adapters.systemctl import (
     user_systemctl,
 )
 from steamshare.adapters.unit_installer import SYSTEM_UNIT_DIRECTORY
-from steamshare.cli.questions import ask_yes_no
+from steamshare.cli.questions import ask_typed_word, ask_yes_no
 from steamshare.cli.run_report import (
     SKIPPED_WORD,
     ClosingNotes,
@@ -67,23 +77,45 @@ from steamshare.cli.run_report import (
     section_header,
 )
 from steamshare.cli.shared import ROOT_USER_ID, SUDO_UNINSTALL_COMMAND, CommandError
-from steamshare.cli.uninstall_summary import REPOSITORY_ITEM, summary_lines
+from steamshare.cli.steam_settings_cleanup import (
+    KEEP_STEAM_SETTINGS_FLAG,
+    PURGE_FLAG,
+    ConnectToSteam,
+    check_steam_mappings,
+    clear_steam_mappings,
+)
+from steamshare.cli.uninstall_summary import (
+    REPOSITORY_ITEM,
+    cleared_choices,
+    cleared_choices_item,
+    kept_choices,
+    summary_lines,
+)
 from steamshare.cli.watch_service_setup import (
     FLAG_FILE_NAME_IN_REPORT,
     USER_UNIT_DIRECTORY_IN_HOME,
 )
+from steamshare.core.library_layout import PROTON_PREFIXES_DIRECTORY, count_proton_prefixes
+from steamshare.core.live_proton_mapping import OwnedGame
+from steamshare.core.mapping_cleanup import MappingCleanup
+from steamshare.core.ntfs_partitions import format_size
 from steamshare.core.systemd_units import WATCH_SERVICE
 from steamshare.core.uninstall_plan import (
+    ClearProtonMappings,
     DisableUnit,
+    FolderSize,
     InstalledUnit,
     ReloadManager,
     RemoveFile,
     RemoveFolderIfEmpty,
+    RemoveTree,
     ServiceManager,
     StopUnit,
+    UncheckedMappings,
     UninstallAction,
     UninstallFacts,
     UninstallPlan,
+    bind_mount_sources,
     build_uninstall_plan,
     enablement_links,
     nothing_installed,
@@ -98,6 +130,7 @@ NOTHING_TO_UNINSTALL = "Nothing to uninstall: no steamshare units were found."
 DRY_RUN_HEADER = "Dry run: nothing is removed and systemctl is not run."
 WATCH_SECTION_TITLE = "Watch service"
 MOUNTS_SECTION_TITLE = "Mounts"
+PURGE_SECTION_TITLE = "Purge"
 KEPT_SECTION_TITLE = "Kept"
 DONE_HEADLINE = "Done. What was kept, and what you can do with it:"
 DRY_RUN_HEADLINE = "Nothing was changed. After a real uninstall:"
@@ -107,8 +140,9 @@ DISABLED_WORDS = ("disabled", "would disable")
 STOPPED_WORDS = ("stopped", "would stop")
 REMOVED_WORDS = ("removed", "would remove")
 RELOADED_WORDS = ("reloaded", "would reload")
+CLEARED_WORDS = ("cleared", "would clear")
 KEPT_WORD = "kept"
-ACTION_WORDS = (DISABLED_WORDS, STOPPED_WORDS, REMOVED_WORDS, RELOADED_WORDS)
+ACTION_WORDS = (DISABLED_WORDS, STOPPED_WORDS, REMOVED_WORDS, RELOADED_WORDS, CLEARED_WORDS)
 # The status-word column is as wide as the longest word it can show.
 DONE_WORD_WIDTH = max(
     len(word) for word in [*(done for done, _ in ACTION_WORDS), KEPT_WORD, SKIPPED_WORD]
@@ -117,10 +151,13 @@ PLANNED_WORD_WIDTH = max(
     len(word) for word in [*(planned for _, planned in ACTION_WORDS), KEPT_WORD]
 )
 
-# What every uninstall keeps, whatever it found; see the module docstring.
-KEPT_PROTON_CHOICES = "the Proton choices watch made in Steam"
 # The same wording as the summary, so both name the kept item identically.
 KEPT_REPOSITORY = REPOSITORY_ITEM
+
+# A purge deletes saves that cannot be recovered, so it asks for this word
+# typed out, not a y that a reflexive Enter or habit can give.
+PURGE_CONFIRMATION_WORD = "purge"
+PURGE_QUESTION = f'Type "{PURGE_CONFIRMATION_WORD}" to delete these permanently:'
 
 # The notes at the end, about what was kept; {arrow} is the report's arrow.
 DATA_FOLDERS_NOTE = (
@@ -144,6 +181,25 @@ REPOSITORY_NOTE = (
     "This repository and the files on the NTFS partition were not touched; delete the "
     "repository folder whenever you like."
 )
+INSTALLED_CHOICES_NOTE = (
+    "The Proton choices of installed games stay in Steam: clearing them would make Steam "
+    "re-download those games as their Linux build. To change one game, use its "
+    "Properties {arrow} Compatibility."
+)
+UNCONFIRMED_CLEARS_NOTE = (
+    "Steam did not confirm clearing the Proton choice of {games}. Clear it by hand in the "
+    "game's Properties {arrow} Compatibility."
+)
+UNCHECKED_CHOICES_NOTE = (
+    "Steam is not running, so the {count} games steamshare mapped were not checked. A real "
+    f"{PURGE_FLAG} needs Steam open, or {KEEP_STEAM_SETTINGS_FLAG} to leave those choices in "
+    "Steam."
+)
+PURGE_REMAINS_NOTE = (
+    "What remains is this repository and the games on the shared NTFS partition. Delete the "
+    "repository folder whenever you like. To delete the games too, format the partition from "
+    "Windows (Disk Management); that deletes every game on it."
+)
 
 
 class UninstallError(CommandError):
@@ -163,6 +219,8 @@ class System:
     run_command: CommandRunner
     console: Console
     symbols: Symbols
+    # Opens the running Steam client, for a purge's Proton choices.
+    connect_to_steam: ConnectToSteam
 
 
 def add_parser(subcommands: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
@@ -172,7 +230,8 @@ def add_parser(subcommands: "argparse._SubParsersAction[argparse.ArgumentParser]
         description="Finds what install set up, by the header of its unit files, shows what "
         "it removes and what it keeps, and asks before removing anything. It keeps the Proton "
         "prefixes, the Proton choices made in Steam and, unless told otherwise, Steam's "
-        "debugger flag. Running it again when nothing is left changes nothing.",
+        "debugger flag; --purge deletes those too. Running it again when nothing is left "
+        "changes nothing.",
     )
     parser.add_argument(
         "--dry-run",
@@ -187,6 +246,18 @@ def add_parser(subcommands: "argparse._SubParsersAction[argparse.ArgumentParser]
         action="store_true",
         help="also delete Steam's debugger flag file, which turns the debugger off at "
         "Steam's next start (kept by default: other tools, such as Decky Loader, may use it)",
+    )
+    parser.add_argument(
+        PURGE_FLAG,
+        action="store_true",
+        help="also delete the Proton prefixes (with any saves in them) and shader caches, and "
+        "Steam's debugger flag, and clear the Proton choices steamshare made for games that "
+        "are not installed; Steam must be running (asks you to type 'purge')",
+    )
+    parser.add_argument(
+        KEEP_STEAM_SETTINGS_FLAG,
+        action="store_true",
+        help=f"with {PURGE_FLAG}, leave the Proton choices in Steam, so Steam need not be running",
     )
     parser.add_argument(
         "--steam-root",
@@ -206,6 +277,7 @@ def run(arguments: argparse.Namespace) -> int:
         run_command=run_command,
         console=terminal_console(),
         symbols=choose_symbols(sys.stdout.encoding, os.environ),
+        connect_to_steam=connect_to_steam_client,
     )
     return uninstall(arguments, system)
 
@@ -217,21 +289,30 @@ def uninstall(arguments: argparse.Namespace, system: System) -> int:
         if nothing_installed(facts):
             print(NOTHING_TO_UNINSTALL)
             return EXIT_OK
+        if arguments.purge:
+            # Before anything changes: a purge that cannot reach Steam refuses here.
+            facts = _discover_purge(facts, arguments, system)
         plan = build_uninstall_plan(facts)
         sections = _sections(plan, system)
         if arguments.dry_run:
-            _show_plan(sections, plan, system)
-            notes = _closing_notes(facts, plan, system, manager_unreachable=False)
+            _show_plan(sections, facts, plan, system)
+            notes = _closing_notes(
+                facts, plan, system, manager_unreachable=False, unconfirmed_clears=()
+            )
             _print_closing(notes, dry_run=True)
             return EXIT_OK
         # A real run lists every file once, as it removes it; before the
         # question, a few lines of counts are easier to read.
         for line in summary_lines(facts, plan, system.invoking_user.home):
             system.console.show(line)
-        _confirm(system.console, assume_yes=arguments.yes)
-        progress = _apply_sections(sections, system)
+        _confirm(system.console, assume_yes=arguments.yes, purge=arguments.purge)
+        progress = _apply_sections(sections, system, _steam_root(arguments, system))
         notes = _closing_notes(
-            facts, plan, system, manager_unreachable=progress.user_manager_error is not None
+            facts,
+            plan,
+            system,
+            manager_unreachable=progress.user_manager_error is not None,
+            unconfirmed_clears=progress.unconfirmed_clears,
         )
         _print_closing(notes, dry_run=False)
     except CommandError as error:
@@ -244,6 +325,11 @@ def uninstall(arguments: argparse.Namespace, system: System) -> int:
 
 
 def _check_can_run(arguments: argparse.Namespace, system: System) -> None:
+    if arguments.keep_steam_settings and not arguments.purge:
+        raise UninstallError(
+            f"{KEEP_STEAM_SETTINGS_FLAG} only applies with {PURGE_FLAG}: without it, uninstall "
+            f"leaves Steam's settings alone anyway. Add {PURGE_FLAG}, or leave the flag out."
+        )
     if not arguments.dry_run and not system.is_root:
         raise UninstallError(_needs_root_message(arguments))
     if system.invoking_user.user_id == ROOT_USER_ID:
@@ -256,7 +342,12 @@ def _check_can_run(arguments: argparse.Namespace, system: System) -> None:
 
 def _needs_root_message(arguments: argparse.Namespace) -> str:
     # Repeats only the flags the user gave.
-    given = [("--yes", arguments.yes), (REMOVE_DEBUGGER_FLAG, arguments.remove_debugger_flag)]
+    given = [
+        ("--yes", arguments.yes),
+        (REMOVE_DEBUGGER_FLAG, arguments.remove_debugger_flag),
+        (PURGE_FLAG, arguments.purge),
+        (KEEP_STEAM_SETTINGS_FLAG, arguments.keep_steam_settings),
+    ]
     parts = [flag for flag, is_given in given if is_given]
     if arguments.steam_root is not None:
         parts += ["--steam-root", str(arguments.steam_root)]
@@ -270,8 +361,7 @@ def _needs_root_message(arguments: argparse.Namespace) -> str:
 
 def _discover(arguments: argparse.Namespace, system: System) -> UninstallFacts:
     home = Path(system.invoking_user.home)
-    steam_root = arguments.steam_root or default_steam_root(home)
-    flag = remote_debugging_flag_path(steam_root)
+    flag = remote_debugging_flag_path(_steam_root(arguments, system))
     # Under sudo the environment is reset, so XDG_CONFIG_HOME is unset and the
     # state file is looked for in ~/.config, where watch puts it by default.
     state_file = state_file_path(system.environment, home)
@@ -281,16 +371,62 @@ def _discover(arguments: argparse.Namespace, system: System) -> UninstallFacts:
             watch_unit=find_generated_unit(home / USER_UNIT_DIRECTORY_IN_HOME / WATCH_SERVICE),
             state_file=state_file if state_file.is_file() else None,
             debugger_flag=flag if flag.is_file() else None,
-            remove_debugger_flag=arguments.remove_debugger_flag,
+            # A purge removes the flag along with everything else.
+            remove_debugger_flag=arguments.remove_debugger_flag or arguments.purge,
         )
     except OSError as error:
-        raise UninstallError(
-            f"Could not look in {error.filename}: {error.strerror}. Fix the cause, "
-            f"then run `{SUDO_UNINSTALL_COMMAND}` again."
-        ) from error
+        raise _look_error(error) from error
 
 
-def _confirm(console: Console, *, assume_yes: bool) -> None:
+def _discover_purge(
+    facts: UninstallFacts, arguments: argparse.Namespace, system: System
+) -> UninstallFacts:
+    """Add what only a purge needs: the data's sizes, and what Steam says."""
+    sources = [Path(source) for source in bind_mount_sources(facts.system_units)]
+    try:
+        on_disk = tuple(
+            FolderSize(source, folder_size(source))
+            for source in sources
+            if source.is_dir() and not source.is_symlink()
+        )
+        prefix_folders = [
+            name
+            for source in sources
+            if source.name == PROTON_PREFIXES_DIRECTORY
+            for name in subfolder_names(source)
+        ]
+    except OSError as error:
+        raise _look_error(error) from error
+    mappings = None
+    if not arguments.keep_steam_settings:
+        mappings = check_steam_mappings(
+            None if facts.state_file is None else Path(facts.state_file),
+            _steam_root(arguments, system),
+            system.connect_to_steam,
+            dry_run=arguments.dry_run,
+        )
+    return dataclasses.replace(
+        facts,
+        purge=True,
+        data_folders_on_disk=on_disk,
+        proton_prefix_count=count_proton_prefixes(prefix_folders),
+        mappings=mappings,
+    )
+
+
+def _steam_root(arguments: argparse.Namespace, system: System) -> Path:
+    # The default is in the desktop user's home, not in root's.
+    return arguments.steam_root or default_steam_root(Path(system.invoking_user.home))
+
+
+def _look_error(error: OSError) -> UninstallError:
+    return UninstallError(
+        f"Could not look in {error.filename}: {error.strerror}. Fix the cause, "
+        f"then run `{SUDO_UNINSTALL_COMMAND}` again."
+    )
+
+
+def _confirm(console: Console, *, assume_yes: bool, purge: bool) -> None:
     if assume_yes:
         return
     if not console.is_interactive:
@@ -298,9 +434,15 @@ def _confirm(console: Console, *, assume_yes: bool) -> None:
             "uninstall asks before removing anything, but input is not a terminal. "
             "Add --yes to remove without asking, or --dry-run to only see the plan."
         )
-    # No is the default, unlike install's: uninstall deletes files, so only an
-    # explicit yes goes ahead.
-    if not ask_yes_no(console, "Proceed?", default=False):
+    if purge:
+        # Stronger than y/N: the saves inside the Proton prefixes cannot be
+        # recovered once deleted.
+        confirmed = ask_typed_word(console, PURGE_QUESTION, PURGE_CONFIRMATION_WORD)
+    else:
+        # No is the default, unlike install's: uninstall deletes files, so only
+        # an explicit yes goes ahead.
+        confirmed = ask_yes_no(console, "Proceed?", default=False)
+    if not confirmed:
         raise UninstallError("Cancelled; nothing was changed.")
 
 
@@ -310,8 +452,9 @@ def _confirm(console: Console, *, assume_yes: bool) -> None:
 @dataclass(frozen=True)
 class Section:
     title: str
-    # The folder most of the section's files are in, named once in its header.
-    folder: Path
+    # The folder most of the section's files are in, named once in its header;
+    # None when they are in several.
+    folder: Path | None
     actions: tuple[UninstallAction, ...]
 
 
@@ -320,11 +463,14 @@ def _sections(plan: UninstallPlan, system: System) -> list[Section]:
     sections = [
         Section(WATCH_SECTION_TITLE, home / USER_UNIT_DIRECTORY_IN_HOME, plan.watch_actions),
         Section(MOUNTS_SECTION_TITLE, system.unit_directory, plan.mount_actions),
+        Section(PURGE_SECTION_TITLE, None, plan.purge_actions),
     ]
     return [section for section in sections if section.actions]
 
 
-def _show_plan(sections: Sequence[Section], plan: UninstallPlan, system: System) -> None:
+def _show_plan(
+    sections: Sequence[Section], facts: UninstallFacts, plan: UninstallPlan, system: System
+) -> None:
     """Print every action a dry run would take, and what it keeps."""
     report = _report(system, dry_run=True)
     print(DRY_RUN_HEADER)
@@ -337,16 +483,16 @@ def _show_plan(sections: Sequence[Section], plan: UninstallPlan, system: System)
             print(report.planned(kind.planned_word, subject))
         print()
     print(section_header(KEPT_SECTION_TITLE))
-    for subject in _kept_subjects(plan, report):
+    for subject in _kept_subjects(facts, plan, report):
         print(report.done(KEPT_WORD, subject))
     print()
 
 
-def _kept_subjects(plan: UninstallPlan, report: RunReport) -> list[str]:
+def _kept_subjects(facts: UninstallFacts, plan: UninstallPlan, report: RunReport) -> list[str]:
     flag = plan.kept_debugger_flag
     return [
         *(report.path(folder) for folder in plan.kept_data_folders),
-        KEPT_PROTON_CHOICES,
+        *kept_choices(facts),
         *([] if flag is None else [f"{FLAG_FILE_NAME_IN_REPORT} ({report.path(flag)})"]),
         KEPT_REPOSITORY,
     ]
@@ -372,13 +518,21 @@ class Progress:
     system: System
     report: RunReport
     section: Section
+    steam_root: Path
     # Why the user's service manager could not be reached, once it could not:
     # its later actions are skipped instead of failing the same way again.
     user_manager_error: Exception | None = None
+    # The games whose Proton choice Steam did not confirm clearing.
+    unconfirmed_clears: Sequence[OwnedGame] = ()
 
 
-def _apply_sections(sections: Sequence[Section], system: System) -> Progress:
-    progress = Progress(system=system, report=_report(system, dry_run=False), section=sections[0])
+def _apply_sections(sections: Sequence[Section], system: System, steam_root: Path) -> Progress:
+    progress = Progress(
+        system=system,
+        report=_report(system, dry_run=False),
+        section=sections[0],
+        steam_root=steam_root,
+    )
     for section in sections:
         progress.section = section
         print(progress.report.section(section.title, section.folder))
@@ -427,6 +581,34 @@ def _remove_folder_if_empty(action: RemoveFolderIfEmpty, progress: Progress) -> 
     except OSError as error:
         raise _file_error(action.path, error) from error
     return progress.report.done(REMOVED_WORDS[0], progress.report.path(path))
+
+
+def _remove_tree(action: RemoveTree, progress: Progress) -> str:
+    try:
+        remove_tree(Path(action.path))
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        raise _file_error(action.path, error) from error
+    return progress.report.done(REMOVED_WORDS[0], progress.report.path(action.path))
+
+
+def _clear_proton_mappings(action: ClearProtonMappings, progress: Progress) -> str:
+    cleanup = action.mappings
+    # A real run checks Steam before it starts and refuses without it, so
+    # only a dry run's plan can hold unchecked mappings.
+    assert isinstance(cleanup, MappingCleanup), "a real purge always checks Steam first"
+    unconfirmed = clear_steam_mappings(
+        cleanup, progress.steam_root, progress.system.connect_to_steam
+    )
+    progress.unconfirmed_clears = unconfirmed
+    cleared_count = len(cleanup.to_clear) - len(unconfirmed)
+    lines = [progress.report.done(CLEARED_WORDS[0], cleared_choices_item(cleared_count))]
+    if unconfirmed:
+        lines.append(
+            progress.report.skipped(f"{len(unconfirmed)} games: Steam did not confirm the clear")
+        )
+    return "\n".join(lines)
 
 
 ManagedAction = DisableUnit | StopUnit | ReloadManager
@@ -517,6 +699,19 @@ def _folder_subject(
     return f"{report.path(action.path)}  (if empty)"
 
 
+def _tree_subject(action: RemoveTree, section: Section, report: RunReport, system: System) -> str:
+    return f"{report.path(action.path)}  ({format_size(action.size_bytes)})"
+
+
+def _clear_subject(
+    action: ClearProtonMappings, section: Section, report: RunReport, system: System
+) -> str:
+    # The plan holds this action only when there is something to clear, so
+    # there is exactly one item.
+    [subject] = cleared_choices(action.mappings)
+    return subject
+
+
 def _manager_label(manager: ServiceManager, system: System) -> str:
     if manager is ServiceManager.USER:
         return f"systemd for {system.invoking_user.name}"
@@ -529,6 +724,8 @@ ACTION_KINDS: dict[type, ActionKind] = {
     ReloadManager: ActionKind(RELOADED_WORDS[1], _reload_subject, _reload_manager),
     RemoveFile: ActionKind(REMOVED_WORDS[1], _file_subject, _remove_file),
     RemoveFolderIfEmpty: ActionKind(REMOVED_WORDS[1], _folder_subject, _remove_folder_if_empty),
+    RemoveTree: ActionKind(REMOVED_WORDS[1], _tree_subject, _remove_tree),
+    ClearProtonMappings: ActionKind(CLEARED_WORDS[1], _clear_subject, _clear_proton_mappings),
 }
 
 
@@ -536,7 +733,12 @@ ACTION_KINDS: dict[type, ActionKind] = {
 
 
 def _closing_notes(
-    facts: UninstallFacts, plan: UninstallPlan, system: System, *, manager_unreachable: bool
+    facts: UninstallFacts,
+    plan: UninstallPlan,
+    system: System,
+    *,
+    manager_unreachable: bool,
+    unconfirmed_clears: Sequence[OwnedGame],
 ) -> ClosingNotes:
     """Return the notes on what was kept, and what is left to do by hand."""
     report = _report(system, dry_run=False)
@@ -544,9 +746,14 @@ def _closing_notes(
     steps = []
     if manager_unreachable and facts.watch_unit is not None:
         steps.append(_unreachable_manager_step(facts.watch_unit, system, report))
+    if unconfirmed_clears:
+        games = ", ".join(f"{game.name} ({game.appid})" for game in unconfirmed_clears)
+        steps.append(UNCONFIRMED_CLEARS_NOTE.format(games=games, arrow=arrow))
+    if isinstance(facts.mappings, UncheckedMappings):
+        steps.append(UNCHECKED_CHOICES_NOTE.format(count=facts.mappings.managed_count))
     if plan.kept_data_folders:
         steps.append(_data_folders_note(plan.kept_data_folders, report))
-    steps.append(PROTON_CHOICES_NOTE.format(arrow=arrow))
+    steps += _choices_notes(facts, arrow)
     if plan.kept_debugger_flag is not None:
         steps.append(
             DEBUGGER_FLAG_KEPT_NOTE.format(
@@ -555,8 +762,17 @@ def _closing_notes(
         )
     if plan.removed_debugger_flag is not None:
         steps.append(DEBUGGER_FLAG_REMOVED_NOTE.format(arrow=arrow))
-    steps.append(REPOSITORY_NOTE)
+    steps.append(PURGE_REMAINS_NOTE if facts.purge else REPOSITORY_NOTE)
     return ClosingNotes(next_steps=tuple(steps))
+
+
+def _choices_notes(facts: UninstallFacts, arrow: str) -> list[str]:
+    """Return the note on the Proton choices left in Steam, if any are."""
+    if not facts.purge or facts.mappings is None:
+        return [PROTON_CHOICES_NOTE.format(arrow=arrow)]
+    if kept_choices(facts):
+        return [INSTALLED_CHOICES_NOTE.format(arrow=arrow)]
+    return []
 
 
 def _data_folders_note(folders: Sequence[PurePosixPath], report: RunReport) -> str:

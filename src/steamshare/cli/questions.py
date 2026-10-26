@@ -1,4 +1,4 @@
-"""The questions a command asks at the terminal: yes or no, or a number from a list.
+"""The questions a command asks at the terminal: yes or no, a number, or a typed word.
 
 Shared by `install` and `uninstall`, so both ask, re-ask and stop the same
 way. What counts as a valid answer is decided in `core.prompt_answers`; this
@@ -34,6 +34,17 @@ def ask_yes_no(console: Console, question: str, *, default: bool) -> bool:
             console.show(ANSWERED_SEPARATOR)
             return answer
         console.show("Please answer y or n.")
+
+
+def ask_typed_word(console: Console, question: str, word: str) -> bool:
+    """Ask the user to type `word`; return whether they did.
+
+    For a step that cannot be undone: a reflexive Enter or "y" does not go
+    ahead, and anything but the word declines, without asking again.
+    """
+    answer = _ask(console, f"{question} ")
+    console.show(ANSWERED_SEPARATOR)
+    return answer.strip() == word
 
 
 def _ask(console: Console, prompt: str) -> str:

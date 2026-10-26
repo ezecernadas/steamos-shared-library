@@ -8,9 +8,11 @@ system and uninstalls it again, to show the two are symmetric.
 """
 
 import argparse
+import json
 import shlex
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -18,6 +20,8 @@ import pytest
 from steamshare.__main__ import build_parser
 from steamshare.adapters.console import Console
 from steamshare.adapters.invoking_user import InvokingUser
+from steamshare.adapters.steam_cdp import SteamDebuggerUnavailableError
+from steamshare.adapters.steam_client_api import OwnedGames
 from steamshare.cli import install as install_command
 from steamshare.cli.install_choices import Discovery
 from steamshare.cli.run_report import UNICODE_SYMBOLS
@@ -28,6 +32,7 @@ from steamshare.cli.uninstall import (
     System,
     uninstall,
 )
+from steamshare.core.live_proton_mapping import CompatToolChange, CompatToolSetting, OwnedGame
 from steamshare.core.systemd_units import (
     InstallConfig,
     WatchServiceConfig,
@@ -37,6 +42,9 @@ from steamshare.core.systemd_units import (
 )
 
 BACKUP_SUFFIX = ".bak-20261026-183131"
+STEAMSHARE_MAPPING = CompatToolSetting("proton_experimental", 250)
+# What Steam reports for a native game once its mapping is cleared.
+STEAM_DEFAULT = CompatToolSetting("steamlinuxruntime_sniper", 75)
 WATCH_SERVICE = "steamshare-watch.service"
 USER_SYSTEMCTL = ["systemctl", "--user", "--machine=player@"]
 
@@ -58,6 +66,13 @@ class FakeSystem:
         self.answers: list[str] = []
         self.prompts: list[str] = []
         self.interactive = False
+        # The running Steam client a purge talks to.
+        self.steam_running = True
+        self.steam_games: list[OwnedGame] = []
+        self.steam_changes: list[CompatToolChange] = []
+        # What the machine looked like when Steam was asked to clear, to
+        # check the order of a purge.
+        self.when_cleared: dict[str, object] = {}
 
     def build(self) -> System:
         return System(
@@ -68,6 +83,7 @@ class FakeSystem:
             run_command=self._run,
             console=Console(ask=self._ask, show=print, is_interactive=self.interactive),
             symbols=UNICODE_SYMBOLS,
+            connect_to_steam=self._connect_to_steam,
         )
 
     # --- What install leaves behind ------------------------------------------
@@ -144,6 +160,26 @@ class FakeSystem:
             if fragment in command:
                 raise error
 
+    @contextmanager
+    def _connect_to_steam(self, steam_root: Path) -> Iterator["FakeSystem"]:
+        if not self.steam_running:
+            raise SteamDebuggerUnavailableError("Steam's debugger is not answering")
+        yield self
+
+    def owned_games(self, appids: frozenset[str] | None = None) -> OwnedGames:
+        games = tuple(game for game in self.steam_games if appids is None or game.appid in appids)
+        return OwnedGames(games=games, without_details=())
+
+    def specify_compat_tools(
+        self, changes: Sequence[CompatToolChange]
+    ) -> dict[str, CompatToolSetting | None]:
+        self.steam_changes += changes
+        self.when_cleared = {
+            "commands": list(self.commands),
+            "state file exists": self.state_file.exists(),
+        }
+        return {change.appid: STEAM_DEFAULT for change in changes}
+
     def _ask(self, prompt: str) -> str:
         self.prompts.append(prompt)
         if not self.answers:
@@ -152,10 +188,20 @@ class FakeSystem:
 
 
 def make_arguments(
-    *, dry_run: bool = False, yes: bool = True, remove_debugger_flag: bool = False
+    *,
+    dry_run: bool = False,
+    yes: bool = True,
+    remove_debugger_flag: bool = False,
+    purge: bool = False,
+    keep_steam_settings: bool = False,
 ) -> argparse.Namespace:
     return argparse.Namespace(
-        dry_run=dry_run, yes=yes, remove_debugger_flag=remove_debugger_flag, steam_root=None
+        dry_run=dry_run,
+        yes=yes,
+        remove_debugger_flag=remove_debugger_flag,
+        purge=purge,
+        keep_steam_settings=keep_steam_settings,
+        steam_root=None,
     )
 
 
@@ -552,6 +598,201 @@ def test_uninstall_is_a_command_with_its_flags() -> None:
     assert defaults.steam_root is None
 
 
+# --- Purge -------------------------------------------------------------------
+
+
+def mapped_game(appid: str, *, installed: bool) -> OwnedGame:
+    return OwnedGame(appid, f"Game {appid}", installed, None, STEAMSHARE_MAPPING)
+
+
+def purgeable_system(tmp_path: Path, *, is_root: bool = True) -> FakeSystem:
+    """An installed system whose watch mapped games 10 and 11; 11 is installed."""
+    system = installed_system(tmp_path, is_root=is_root)
+    system.state_file.write_text(json.dumps({"managed_mappings": ["10", "11"]}))
+    system.steam_games = [mapped_game("10", installed=False), mapped_game("11", installed=True)]
+    prefix = system.home / ".local/share/steam-shared/compatdata/10/pfx"
+    prefix.mkdir(parents=True)
+    (prefix / "user.reg").write_text("save data\n")
+    return system
+
+
+def test_purge_removes_the_data_the_flag_and_the_choices_of_games_not_installed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = purgeable_system(tmp_path)
+
+    exit_code = uninstall(make_arguments(purge=True), system.build())
+
+    assert exit_code == EXIT_OK
+    assert not (system.home / ".local/share/steam-shared").exists()
+    assert not system.debugger_flag.exists()
+    assert not system.state_file.exists()
+    # The installed game keeps its mapping: clearing it would re-download it.
+    assert [(change.appid, change.tool) for change in system.steam_changes] == [("10", "")]
+    output = capsys.readouterr().out
+    assert "  ✓ cleared   Proton choices of 1 game not installed\n" in output
+    assert "Proton choices of installed games stay in Steam" in output
+    assert "Disk Management" in output
+
+
+def test_purge_stops_watch_before_clearing_and_removes_the_state_after(
+    tmp_path: Path,
+) -> None:
+    system = purgeable_system(tmp_path)
+    names = system.system_unit_names()
+
+    uninstall(make_arguments(purge=True), system.build())
+
+    # watch would map the games again; the state says which mappings are ours.
+    assert system.when_cleared["commands"] == [
+        [*USER_SYSTEMCTL, "disable", "--now", WATCH_SERVICE],
+        [*USER_SYSTEMCTL, "daemon-reload"],
+    ]
+    assert system.when_cleared["state file exists"] is True
+    assert ["systemctl", "disable", "--now", names[0]] in system.commands
+
+
+def test_purge_deletes_the_data_only_after_the_bind_mounts_are_stopped(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = purgeable_system(tmp_path)
+
+    uninstall(make_arguments(purge=True), system.build())
+
+    output = capsys.readouterr().out
+    last_disable = output.index(f"disabled  {system.system_unit_names()[2]}")
+    data_removed = output.index("removed   ~/.local/share/steam-shared/compatdata")
+    assert last_disable < data_removed
+
+
+def test_purge_asks_for_the_word_typed_out(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = purgeable_system(tmp_path)
+    system.interactive = True
+    system.answers = ["purge"]
+
+    exit_code = uninstall(make_arguments(purge=True, yes=False), system.build())
+
+    assert exit_code == EXIT_OK
+    assert system.prompts == ['Type "purge" to delete these permanently: ']
+
+
+@pytest.mark.parametrize("answer", ["", "y", "yes", "PURGE"])
+def test_anything_but_the_typed_word_cancels_a_purge(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], answer: str
+) -> None:
+    system = purgeable_system(tmp_path)
+    system.interactive = True
+    system.answers = [answer]
+
+    exit_code = uninstall(make_arguments(purge=True, yes=False), system.build())
+
+    assert exit_code == EXIT_FAILURE
+    assert system.commands == []
+    assert system.steam_changes == []
+    assert (system.home / ".local/share/steam-shared/compatdata/10").is_dir()
+    assert "Cancelled; nothing was changed." in capsys.readouterr().err
+
+
+def test_purge_without_a_terminal_needs_yes(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = purgeable_system(tmp_path)
+
+    exit_code = uninstall(make_arguments(purge=True, yes=False), system.build())
+
+    assert exit_code == EXIT_FAILURE
+    assert system.commands == []
+    assert "--yes" in capsys.readouterr().err
+
+
+def test_purge_refuses_before_any_change_when_steam_is_not_reachable(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = purgeable_system(tmp_path)
+    system.steam_running = False
+
+    exit_code = uninstall(make_arguments(purge=True), system.build())
+
+    assert exit_code == EXIT_FAILURE
+    assert system.commands == []
+    assert len(system.remaining_unit_files()) == 8
+    assert system.state_file.exists()
+    error = capsys.readouterr().err
+    assert "Start Steam" in error
+    assert "sudo ./steamshare uninstall --purge" in error
+    assert "--keep-steam-settings" in error
+
+
+def test_keep_steam_settings_purges_without_steam_and_keeps_every_choice(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = purgeable_system(tmp_path)
+    system.steam_running = False
+
+    exit_code = uninstall(make_arguments(purge=True, keep_steam_settings=True), system.build())
+
+    assert exit_code == EXIT_OK
+    assert system.steam_changes == []
+    assert not (system.home / ".local/share/steam-shared").exists()
+    assert "The Proton choices watch made stay in Steam" in capsys.readouterr().out
+
+
+def test_keep_steam_settings_needs_purge(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = purgeable_system(tmp_path)
+
+    exit_code = uninstall(make_arguments(keep_steam_settings=True), system.build())
+
+    assert exit_code == EXIT_FAILURE
+    assert "--purge" in capsys.readouterr().err
+
+
+def test_a_purge_dry_run_lists_the_data_with_sizes_and_the_choices_it_clears(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = purgeable_system(tmp_path, is_root=False)
+
+    exit_code = uninstall(make_arguments(purge=True, dry_run=True, yes=False), system.build())
+
+    assert exit_code == EXIT_OK
+    assert system.steam_changes == []
+    assert system.commands == []
+    output = capsys.readouterr().out
+    watch = output[output.index("Watch service") : output.index("Mounts")]
+    assert watch.splitlines()[4] == "  · would clear    Proton choices of 1 game not installed"
+    purge = output[output.index("\nPurge\n") : output.index("\nKept\n")].splitlines()[2:]
+    # Sizes depend on the filesystem's folder sizes, so only their place is checked.
+    assert purge[0].startswith("  · would remove   ~/.local/share/steam-shared/compatdata  (")
+    assert purge[1].startswith("  · would remove   ~/.local/share/steam-shared/shadercache  (")
+    assert purge[2:] == [
+        "  · would remove   ~/.local/share/steam-shared  (if empty)",
+        "  · would remove   ~/.steam/steam/.cef-enable-remote-debugging",
+    ]
+    kept = output[output.index("\nKept\n") :].splitlines()[2:4]
+    assert kept == [
+        "  ✓ kept           Proton choices of 1 installed game (clearing them would "
+        "re-download them as Linux builds)",
+        "  ✓ kept           this repository and the files on the NTFS partition",
+    ]
+
+
+def test_a_purge_dry_run_without_steam_says_how_many_games_it_would_check(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = purgeable_system(tmp_path, is_root=False)
+    system.steam_running = False
+
+    exit_code = uninstall(make_arguments(purge=True, dry_run=True), system.build())
+
+    assert exit_code == EXIT_OK
+    output = capsys.readouterr().out
+    assert "would clear    Proton choices of the games not installed, among 2" in output
+    assert "Steam is not running, so the 2 games steamshare mapped were not checked" in output
+
+
 # --- Install, then uninstall -------------------------------------------------
 
 
@@ -599,6 +840,39 @@ def test_uninstall_removes_everything_install_wrote_except_what_it_keeps(
     assert "Done. What was kept, and what you can do with it:" in output
 
 
+def test_install_then_purge_leaves_nothing_steamshare_wrote(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = FakeSystem(tmp_path)
+    # What a desktop already has before install: the standard folders of the
+    # user's home, Steam, and the mount point systemd creates at the first mount.
+    for folder in (".config", ".local/share", ".steam/steam"):
+        (system.home / folder).mkdir(parents=True)
+    system.mount_point.mkdir(parents=True)
+    launcher = tmp_path / "repository" / "steamshare"
+    launcher.parent.mkdir()
+    launcher.write_text("#!/usr/bin/env bash\n")
+    before = snapshot(tmp_path)
+
+    install_command.install(install_arguments(system.mount_point), install_system(system, launcher))
+    # What watch adds once it runs: its state, and a game's Proton prefix.
+    system.state_file.parent.mkdir(parents=True)
+    system.state_file.write_text(json.dumps({"managed_mappings": ["10"]}))
+    (system.home / ".local/share/steam-shared/compatdata/10/pfx").mkdir(parents=True)
+    system.steam_games = [mapped_game("10", installed=False)]
+    exit_code = uninstall(make_arguments(purge=True), system.build())
+
+    assert exit_code == EXIT_OK
+    assert [change.appid for change in system.steam_changes] == ["10"]
+    # Only the user's systemd unit folder stays, empty: other user units live
+    # there too, and on a real system `systemctl disable` leaves its empty
+    # default.target.wants folder in it, so removing it would be noise.
+    user_systemd = {system.user_unit_directory, system.user_unit_directory.parent}
+    assert snapshot(tmp_path) - before == user_systemd
+    assert before - snapshot(tmp_path) == {system.mount_point}
+    assert launcher.exists()
+
+
 def snapshot(root: Path) -> set[Path]:
     return set(root.rglob("*"))
 
@@ -635,3 +909,11 @@ def install_system(system: FakeSystem, launcher: Path) -> install_command.System
 
 def _never_probed(partition: object) -> object:
     raise AssertionError("both install flags are given, so no partition is probed")
+
+
+def test_purge_and_keep_steam_settings_are_flags_off_by_default() -> None:
+    arguments = build_parser().parse_args(["uninstall", "--purge", "--keep-steam-settings"])
+
+    assert arguments.purge and arguments.keep_steam_settings
+    defaults = build_parser().parse_args(["uninstall"])
+    assert not (defaults.purge or defaults.keep_steam_settings)

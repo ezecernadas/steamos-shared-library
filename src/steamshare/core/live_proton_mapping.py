@@ -112,6 +112,18 @@ class LiveDecision:
     action: MappingAction
 
 
+def is_steamshares_mapping(game: OwnedGame, state: SteamshareState) -> bool:
+    """Tell whether the game's current mapping is still the one steamshare made."""
+    # A managed appid whose mapping now names a non-Proton tool was changed
+    # by the user in Steam, so it is theirs now.
+    tool = game.compat_tool
+    return (
+        game.appid in state.managed_mappings
+        and tool.is_mapping()
+        and tool.name.startswith(PROTON_TOOL_PREFIX)
+    )
+
+
 @dataclass(frozen=True)
 class LiveContext:
     """What the rules need to know besides the game itself."""
@@ -120,14 +132,7 @@ class LiveContext:
     library: PurePosixPath  # the shared library folder, which contains steamapps
 
     def is_steamshares_mapping(self, game: OwnedGame) -> bool:
-        # A managed appid whose mapping now names a non-Proton tool was changed
-        # by the user in Steam, so it is theirs now.
-        tool = game.compat_tool
-        return (
-            game.appid in self.state.managed_mappings
-            and tool.is_mapping()
-            and tool.name.startswith(PROTON_TOOL_PREFIX)
-        )
+        return is_steamshares_mapping(game, self.state)
 
     def is_in_library(self, folder: PurePosixPath) -> bool:
         return folder.is_relative_to(self.library / STEAMAPPS_DIRECTORY / COMMON_DIRECTORY)

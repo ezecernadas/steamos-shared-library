@@ -117,6 +117,7 @@ Everything runs through `./steamshare` in the repository folder:
 |---|---|
 | `sudo ./steamshare install` | Sets up the mounts and the watch service. Safe to run again: it changes only what is out of date, and backs up anything it replaces. |
 | `sudo ./steamshare uninstall` | Removes what `install` set up and keeps your data; see [Safety and uninstalling](#safety-and-uninstalling). |
+| `sudo ./steamshare uninstall --purge` | Also deletes the Proton prefixes (and any saves in them) and the Proton choices steamshare made in Steam. Needs Steam open. |
 | `./steamshare doctor --library <path>` | Checks the whole setup and says what to fix. |
 | `./steamshare force-proton --library <path> --keep-native <appid>` | Lets a game use its native Linux build. Windows can no longer run it from the shared library, so such games are better installed in a separate Linux library. |
 | `./steamshare watch --library <path> --once --dry-run` | Shows what the watch service would change right now. |
@@ -163,6 +164,20 @@ It finds what `install` set up by the header of the generated files, never by na
 - **Removed:** the watch service, the mount units and the `ntfs3` loader (stopped first, the bind mounts before the NTFS mount), the backups `install` made of them, steamshare's state file, and the mount point folder if it is empty.
 - **Kept:** the Proton prefixes and shader caches in `~/.local/share/steam-shared/` (some games keep their saves there), the Proton choices `watch` made in Steam (undoing them would make Steam re-download native games as their Linux build; change one in the game's *Properties → Compatibility*), this repository, and the files on the NTFS partition.
 - **Steam's debugger flag** is kept too, since other tools such as Decky Loader may use it. Add `--remove-debugger-flag` to delete it.
+
+To remove everything, saves included, add `--purge`:
+
+| `--purge` also removes | How |
+|---|---|
+| The Proton prefixes and shader caches in `~/.local/share/steam-shared/`, with any saves inside them | Deleted only after the bind mounts that showed them are stopped; links inside a prefix (such as `dosdevices/z:`, which points at `/`) are removed, never followed |
+| Steam's debugger flag | As `--remove-debugger-flag` does |
+| The Proton choices steamshare made for games that are **not** installed | Cleared in the running Steam, right after the watch service stops (so it cannot set them again) and before steamshare's state is deleted |
+
+The Proton choices of installed games stay: clearing them would make Steam re-download those games as their Linux build. What remains after a purge is this repository and the games on the NTFS partition.
+
+- **Steam must be open,** since its settings live in the running client. A purge checks this before changing anything. Add `--keep-steam-settings` to purge without Steam and leave every Proton choice in place.
+- **It asks you to type `purge`,** not just `y`: the saves in the prefixes cannot be recovered. `--yes` skips the question.
+- `./steamshare uninstall --purge --dry-run` lists every file with its size, and how many Proton choices it would clear.
 
 ## Troubleshooting
 

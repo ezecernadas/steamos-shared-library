@@ -8,6 +8,7 @@ The layout below is Steam's convention, observed on the real setup during
 Phase 0 (see docs/PLAN.md, "Phase 0 results").
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
@@ -25,6 +26,10 @@ APP_MANIFEST_PATTERN = "appmanifest_*.acf"
 # corruption. Shader caches are compiled per OS and driver, so Windows has no
 # use for the Linux ones. Both are bind-mounted from ext4 instead.
 LINUX_ONLY_DIRECTORIES = ("compatdata", "shadercache")
+
+# Proton keeps one prefix per game in `compatdata`, in a folder named after
+# the game's appid (such as compatdata/1005870).
+PROTON_PREFIXES_DIRECTORY = "compatdata"
 
 # The ext4 folder that holds the real `compatdata` and `shadercache`, which
 # are bind-mounted over the library (docs/PLAN.md, "Bind-mount units").
@@ -46,6 +51,11 @@ class LibraryEntry:
 
     relative_path: PurePosixPath  # relative to the library root
     is_symlink: bool
+
+
+def count_proton_prefixes(folder_names: Iterable[str]) -> int:
+    """Count the folders of `compatdata` that are Proton prefixes, one per game."""
+    return sum(1 for name in folder_names if name.isdecimal())
 
 
 def is_inside_linux_tool(entry: LibraryEntry) -> bool:

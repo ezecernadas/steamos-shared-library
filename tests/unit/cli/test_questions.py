@@ -3,7 +3,7 @@
 import pytest
 
 from steamshare.adapters.console import Console
-from steamshare.cli.questions import ask_numbered, ask_yes_no
+from steamshare.cli.questions import ask_numbered, ask_typed_word, ask_yes_no
 from steamshare.cli.shared import CommandError
 
 
@@ -48,3 +48,15 @@ def test_a_number_out_of_range_is_asked_again() -> None:
 def test_input_ending_at_a_prompt_stops_and_says_nothing_changed() -> None:
     with pytest.raises(CommandError, match="nothing was changed"):
         ask_yes_no(ScriptedConsole([]).build(), "Proceed?", default=False)
+
+
+def test_a_typed_confirmation_needs_the_exact_word() -> None:
+    assert ask_typed_word(ScriptedConsole(["purge"]).build(), 'Type "purge":', "purge")
+    assert ask_typed_word(ScriptedConsole([" purge "]).build(), 'Type "purge":', "purge")
+
+
+def test_anything_else_typed_declines_without_asking_again() -> None:
+    for answer in ["", "y", "yes", "PURGE", "purg"]:
+        console = ScriptedConsole([answer, "purge"])
+        assert not ask_typed_word(console.build(), 'Type "purge":', "purge")
+        assert console.prompts == ['Type "purge": ']

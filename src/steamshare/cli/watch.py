@@ -28,8 +28,8 @@ import sys
 import threading
 import time
 from collections import Counter
-from collections.abc import Callable, Iterator, Sequence
-from contextlib import AbstractContextManager, contextmanager
+from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -43,9 +43,8 @@ from steamshare.adapters.state_file import (
 from steamshare.adapters.steam_cdp import (
     SteamDebuggerError,
     SteamDebuggerUnavailableError,
-    open_steam_debugger,
 )
-from steamshare.adapters.steam_client_api import OwnedGames, SteamClientApi
+from steamshare.adapters.steam_client_api import OwnedGames, connect_to_steam_client
 from steamshare.adapters.steam_config import DEFAULT_STEAM_ROOT
 from steamshare.cli.shared import absolute_path
 from steamshare.core.live_proton_mapping import (
@@ -236,18 +235,12 @@ def run(arguments: argparse.Namespace) -> int:
         signal.signal(signal_number, lambda number, frame: stop.set())
     system = System(
         state_path=state_file_path(os.environ, Path.home()),
-        connect_to_steam=lambda: connect_to_steam(arguments.steam_root),
+        connect_to_steam=lambda: connect_to_steam_client(arguments.steam_root),
         wait=stop.wait,
         stop_requested=stop.is_set,
         clock=time.monotonic,
     )
     return watch(arguments, system)
-
-
-@contextmanager
-def connect_to_steam(steam_root: Path) -> Iterator[SteamGameClient]:
-    with open_steam_debugger(steam_root) as session:
-        yield SteamClientApi(session)
 
 
 def watch(arguments: argparse.Namespace, system: System) -> int:

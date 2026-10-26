@@ -32,12 +32,17 @@ and throws a clear error otherwise.
 """
 
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Protocol, TypeVar
 
-from steamshare.adapters.steam_cdp import SteamDebuggerError, SteamScriptError
+from steamshare.adapters.steam_cdp import (
+    SteamDebuggerError,
+    SteamScriptError,
+    open_steam_debugger,
+)
 from steamshare.core.live_proton_mapping import CompatToolChange, CompatToolSetting, OwnedGame
 from steamshare.core.watch_pass_scope import GameOverview, LibrarySnapshot
 
@@ -250,6 +255,16 @@ class SteamClientApi:
             raise SteamClientApiError(
                 f"Steam {what_steam_did} in an unexpected shape ({error!r}). {API_CHANGED_HINT}"
             ) from error
+
+
+@contextmanager
+def connect_to_steam_client(steam_root: Path) -> Iterator[SteamClientApi]:
+    """Open the running Steam client's API, and close the connection on leaving.
+
+    Raises `SteamDebuggerUnavailableError` when Steam or its debugger is not up.
+    """
+    with open_steam_debugger(steam_root) as session:
+        yield SteamClientApi(session)
 
 
 def _read_library_snapshot(reply: object) -> LibrarySnapshot:
