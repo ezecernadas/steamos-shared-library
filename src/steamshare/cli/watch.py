@@ -6,10 +6,15 @@ command instead runs while Steam is open, as a user service (see
 ones and maps them to Proton before the user installs them, through the same
 API the game's Properties > Compatibility uses (`adapters.steam_client_api`).
 
-Each pass gathers the owned games, plans with `core.live_proton_mapping`,
-makes each change, checks that Steam took it, and records it in the state
-file shared with `force-proton`. Between passes it sleeps; while Steam is
-closed or starting, it waits and retries with a growing delay.
+Each pass first takes a cheap snapshot of the library, and from it
+`core.watch_pass_scope` decides which games' details to read: every game on
+the first pass, after Steam restarts or comes back, and every
+`--full-interval`; otherwise only the games that changed, which is usually
+none, so the pass ends there silently. It then plans with
+`core.live_proton_mapping`, asks Steam for the changes in batches, checks that
+Steam took each one, and records the confirmed ones in the state file shared
+with `force-proton`. Between passes it sleeps; while Steam is closed or
+starting, it waits and retries with a growing delay.
 
 Every effect goes through `System`, so the tests run whole passes and the
 loop with a fake Steam client.
@@ -20,6 +25,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from collections import Counter
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
@@ -42,23 +48,41 @@ from steamshare.adapters.steam_client_api import OwnedGames, SteamClientApi
 from steamshare.adapters.steam_config import DEFAULT_STEAM_ROOT
 from steamshare.cli.shared import absolute_path
 from steamshare.core.live_proton_mapping import (
+    CompatToolChange,
     CompatToolSetting,
     LiveDecision,
     is_change,
     is_change_confirmed,
     plan_live_mappings,
     record_decision,
-    requested_compat_tool,
+    requested_change,
 )
 from steamshare.core.proton_mapping import DEFAULT_PROTON_TOOL, MappingAction, SteamshareState
+from steamshare.core.watch_pass_scope import (
+    LibrarySnapshot,
+    PassMemory,
+    PassScope,
+    plan_pass_scope,
+    remember_pass,
+)
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
 
 # Five minutes: a game bought or added since the last pass gets mapped long
-# before most users click "Install", and a pass costs Steam about 30 s of
-# light work.
+# before most users click "Install". A pass that finds nothing new costs Steam
+# one instant snapshot.
 DEFAULT_INTERVAL_SECONDS = 300.0
+# An hour: how long a tool the user changed in Properties > Compatibility can
+# go unnoticed, since the snapshot does not show it (see
+# `core.watch_pass_scope`). A full pass reads every game, a few seconds of
+# Steam's time.
+DEFAULT_FULL_INTERVAL_SECONDS = 3600.0
+
+# Changes asked of Steam in one script. Each batch costs one settle wait, and
+# the state is saved after each one, so a pass stopped midway keeps what it
+# did; 50 keeps one script to a few seconds.
+CHANGES_PER_BATCH = 50
 
 # While Steam is closed or starting, retry after this, doubling each time up
 # to the longest delay: quick to notice Steam starting, quiet while it is off.
@@ -89,8 +113,11 @@ UNCONFIRMED_CHANGE_HINTS = {
 class SteamGameClient(Protocol):
     """What a pass needs from Steam; `SteamClientApi` in production."""
 
-    def owned_games(self) -> OwnedGames: ...
-    def specify_compat_tool(self, appid: str, tool: str) -> CompatToolSetting: ...
+    def library_snapshot(self) -> LibrarySnapshot: ...
+    def owned_games(self, appids: frozenset[str] | None = None) -> OwnedGames: ...
+    def specify_compat_tools(
+        self, changes: Sequence[CompatToolChange]
+    ) -> dict[str, CompatToolSetting | None]: ...
 
 
 @dataclass(frozen=True)
@@ -103,6 +130,28 @@ class System:
     # Sleeps up to the given seconds; returns True when a stop was requested.
     wait: Callable[[float], bool]
     stop_requested: Callable[[], bool]
+    # Seconds on a clock that only moves forward, to time full passes.
+    clock: Callable[[], float]
+
+
+@dataclass(frozen=True)
+class PassOutcome:
+    # False if Steam did not confirm a change.
+    all_confirmed: bool
+    # What the next pass compares its snapshot with.
+    memory: PassMemory
+
+
+@dataclass(frozen=True)
+class AppliedChanges:
+    state: SteamshareState
+    # Games whose change Steam did not confirm: the pass failed.
+    unconfirmed: frozenset[str] = frozenset()
+    # Games whose change was not asked for: a dry run, or a stop request.
+    not_attempted: frozenset[str] = frozenset()
+
+    def to_retry(self) -> frozenset[str]:
+        return self.unconfirmed | self.not_attempted
 
 
 class WatchError(Exception):
@@ -131,6 +180,13 @@ def add_parser(subcommands: "argparse._SubParsersAction[argparse.ArgumentParser]
         type=positive_seconds,
         default=DEFAULT_INTERVAL_SECONDS,
         help=f"seconds between passes (default: {DEFAULT_INTERVAL_SECONDS:g})",
+    )
+    parser.add_argument(
+        "--full-interval",
+        type=positive_seconds,
+        default=DEFAULT_FULL_INTERVAL_SECONDS,
+        help="seconds between passes that read every game, to notice tools changed by hand "
+        f"in Steam (default: {DEFAULT_FULL_INTERVAL_SECONDS:g})",
     )
     parser.add_argument(
         "--once",
@@ -173,7 +229,8 @@ def run(arguments: argparse.Namespace) -> int:
     sys.stdout.reconfigure(line_buffering=True)  # type: ignore[union-attr]
     stop = threading.Event()
     # SIGTERM is how systemd stops the service, SIGINT is Ctrl+C. Either one
-    # ends the current pass between two changes, and the loop then exits.
+    # ends the current pass between two batches of changes, and the loop
+    # then exits.
     for signal_number in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signal_number, lambda number, frame: stop.set())
     system = System(
@@ -181,6 +238,7 @@ def run(arguments: argparse.Namespace) -> int:
         connect_to_steam=lambda: connect_to_steam(arguments.steam_root),
         wait=stop.wait,
         stop_requested=stop.is_set,
+        clock=time.monotonic,
     )
     return watch(arguments, system)
 
@@ -194,30 +252,35 @@ def connect_to_steam(steam_root: Path) -> Iterator[SteamGameClient]:
 def watch(arguments: argparse.Namespace, system: System) -> int:
     if arguments.once:
         try:
-            all_confirmed = run_pass(arguments, system)
+            outcome = run_pass(arguments, system, memory=None)
         except (WatchError, SteamDebuggerError) as error:
             print(f"Error: {error}", file=sys.stderr)
             return EXIT_FAILURE
-        return EXIT_OK if all_confirmed else EXIT_FAILURE
+        return EXIT_OK if outcome.all_confirmed else EXIT_FAILURE
     watch_until_stopped(arguments, system)
     return EXIT_OK
 
 
 def watch_until_stopped(arguments: argparse.Namespace, system: System) -> None:
     retry_delay: float | None = None  # None while Steam is reachable
+    # Forgotten after any failed pass, so the first pass after Steam comes
+    # back, or after an error, reads every game.
+    memory: PassMemory | None = None
     while not system.stop_requested():
         try:
-            run_pass(arguments, system)
+            memory = run_pass(arguments, system, memory).memory
             if retry_delay is not None:
                 print("Steam is reachable again.")
             retry_delay = None
             delay = arguments.interval
         except SteamDebuggerUnavailableError as error:
+            memory = None
             if retry_delay is None:
                 print(f"Waiting for Steam: {error}")
             retry_delay = next_retry_delay(retry_delay)
             delay = retry_delay
         except (WatchError, SteamDebuggerError) as error:
+            memory = None
             print(f"Error: {error}", file=sys.stderr)
             delay = arguments.interval
         if system.wait(delay):
@@ -234,20 +297,54 @@ def next_retry_delay(previous: float | None) -> float:
 # --- One pass ------------------------------------------------------------------
 
 
-def run_pass(arguments: argparse.Namespace, system: System) -> bool:
-    """Plan and apply one pass; return False if Steam did not take a change."""
+def run_pass(
+    arguments: argparse.Namespace, system: System, memory: PassMemory | None
+) -> PassOutcome:
+    """Plan and apply one pass over the games that need it; remember it for the next."""
     state = _read_state(system.state_path)
+    now = system.clock()
     with system.connect_to_steam() as steam:
-        owned = steam.owned_games()
+        snapshot = steam.library_snapshot()
+        scope = plan_pass_scope(
+            memory, snapshot, state, now=now, full_interval=arguments.full_interval
+        )
+        if scope.is_empty():
+            # Nothing changed since the last pass; most passes end here, silently.
+            unchanged = remember_pass(
+                memory, snapshot, state, scope, retry_appids=frozenset(), now=now
+            )
+            return PassOutcome(all_confirmed=True, memory=unchanged)
+        owned = steam.owned_games(None if scope.full else scope.appids)
         decisions = plan_live_mappings(owned.games, state, arguments.library)
-        print(format_summary(decisions, owned.without_details, dry_run=arguments.dry_run))
-        if arguments.verbose:
-            print_left_alone(decisions)
+        print_plan(decisions, owned, scope, arguments)
         if arguments.dry_run:
-            print_planned_changes(decisions)
-            print("Dry run: nothing was changed.")
-            return True
-        return apply_decisions(decisions, state, steam, arguments.tool, system)
+            applied = AppliedChanges(state, not_attempted=changed_appids(decisions))
+        else:
+            applied = apply_decisions(decisions, state, steam, arguments.tool, system)
+    # Games left unfinished are read again on the next pass.
+    retry_appids = applied.to_retry() | frozenset(owned.without_details)
+    remembered = remember_pass(
+        memory, snapshot, applied.state, scope, retry_appids=retry_appids, now=now
+    )
+    return PassOutcome(all_confirmed=not applied.unconfirmed, memory=remembered)
+
+
+def print_plan(
+    decisions: Sequence[LiveDecision],
+    owned: OwnedGames,
+    scope: PassScope,
+    arguments: argparse.Namespace,
+) -> None:
+    print(format_summary(decisions, owned.without_details, scope, dry_run=arguments.dry_run))
+    if arguments.verbose:
+        print_left_alone(decisions)
+    if arguments.dry_run:
+        print_planned_changes(decisions)
+        print("Dry run: nothing was changed.")
+
+
+def changed_appids(decisions: Sequence[LiveDecision]) -> frozenset[str]:
+    return frozenset(decision.game.appid for decision in decisions if is_change(decision))
 
 
 def apply_decisions(
@@ -256,39 +353,79 @@ def apply_decisions(
     steam: SteamGameClient,
     tool: str,
     system: System,
-) -> bool:
-    all_confirmed = True
-    for decision in decisions:
+) -> AppliedChanges:
+    # Decisions that change nothing in Steam may still change the state (a
+    # mapping the user took over is forgotten); they take effect at once.
+    state = _save_if_changed(system.state_path, state, record_left_alone(decisions, state))
+    changes = [decision for decision in decisions if is_change(decision)]
+    unconfirmed: set[str] = set()
+    not_attempted = set(changed_appids(changes))
+    for batch in split_into_batches(changes, CHANGES_PER_BATCH):
         if system.stop_requested():
             break
-        if is_change(decision) and not apply_change(decision, steam, tool):
-            all_confirmed = False
-            continue
-        new_state = record_decision(state, decision)
-        # Saved after each change, not at the end: if Steam closes mid-pass,
+        applied = apply_batch(batch, state, steam, tool)
+        unconfirmed |= applied.unconfirmed
+        not_attempted -= changed_appids(batch)
+        # Saved after each batch, not at the end: if Steam closes mid-pass,
         # the mappings already made must still count as steamshare's, or a
         # later --keep-native could never remove them.
-        if new_state != state:
-            _write_state(system.state_path, new_state)
-            state = new_state
-    return all_confirmed
+        state = _save_if_changed(system.state_path, state, applied.state)
+    return AppliedChanges(state, frozenset(unconfirmed), frozenset(not_attempted))
 
 
-def apply_change(decision: LiveDecision, steam: SteamGameClient, tool: str) -> bool:
-    """Ask Steam for the change, and return whether Steam now reports it."""
-    requested = requested_compat_tool(decision, tool)
-    after = steam.specify_compat_tool(decision.game.appid, requested)
-    if is_change_confirmed(decision, after, tool):
-        print(format_game_line(DONE_CHANGE_LABELS[decision.action], decision))
-        return True
-    reported = after.name or "no tool"
+def record_left_alone(decisions: Sequence[LiveDecision], state: SteamshareState) -> SteamshareState:
+    for decision in decisions:
+        if not is_change(decision):
+            state = record_decision(state, decision)
+    return state
+
+
+def split_into_batches(
+    changes: Sequence[LiveDecision], batch_size: int
+) -> list[Sequence[LiveDecision]]:
+    return [changes[start : start + batch_size] for start in range(0, len(changes), batch_size)]
+
+
+def apply_batch(
+    batch: Sequence[LiveDecision], state: SteamshareState, steam: SteamGameClient, tool: str
+) -> AppliedChanges:
+    """Ask Steam for the batch's changes; record each one Steam now reports."""
+    requests = {decision.game.appid: requested_change(decision, tool) for decision in batch}
+    reported = steam.specify_compat_tools(list(requests.values()))
+    unconfirmed = set()
+    for decision in batch:
+        appid = decision.game.appid
+        after = reported.get(appid)
+        if after is not None and is_change_confirmed(decision, after, tool):
+            print(format_game_line(DONE_CHANGE_LABELS[decision.action], decision))
+            state = record_decision(state, decision)
+        else:
+            print_unconfirmed_change(decision, requests[appid], after)
+            unconfirmed.add(appid)
+    return AppliedChanges(state, unconfirmed=frozenset(unconfirmed))
+
+
+def print_unconfirmed_change(
+    decision: LiveDecision, requested: CompatToolChange, after: CompatToolSetting | None
+) -> None:
+    if after is None:
+        reported = "did not report its details afterwards"
+    else:
+        reported = f"now reports {after.name or 'no tool'} (priority {after.priority})"
     print(
         f"Error: asked Steam to set {decision.game.appid} {decision.game.name} to "
-        f"{requested or 'no tool'}, but it now reports {reported} (priority "
-        f"{after.priority}). {UNCONFIRMED_CHANGE_HINTS[decision.action]}",
+        f"{requested.tool or 'no tool'}, but it {reported}. "
+        f"{UNCONFIRMED_CHANGE_HINTS[decision.action]}",
         file=sys.stderr,
     )
-    return False
+
+
+def _save_if_changed(
+    path: Path, saved: SteamshareState, new_state: SteamshareState
+) -> SteamshareState:
+    if new_state != saved:
+        _write_state(path, new_state)
+    return new_state
 
 
 def _read_state(path: Path) -> SteamshareState:
@@ -316,12 +453,17 @@ def _write_state(path: Path, state: SteamshareState) -> None:
 
 
 def format_summary(
-    decisions: Sequence[LiveDecision], without_details: Sequence[str], *, dry_run: bool
+    decisions: Sequence[LiveDecision],
+    without_details: Sequence[str],
+    scope: PassScope,
+    *,
+    dry_run: bool,
 ) -> str:
     """One line: how many games got each decision, in the order the actions are listed."""
     counts = Counter(decision.action for decision in decisions)
     parts = [f"{counts[action]} {action.value}" for action in MappingAction if counts[action]]
-    summary = f"{len(decisions)} games: {', '.join(parts) or 'none'}"
+    games = "games" if scope.full else "changed games"
+    summary = f"{len(decisions)} {games}: {', '.join(parts) or 'none'}"
     if without_details:
         summary += f"; {len(without_details)} did not report their details (retried next pass)"
     return ("Dry run, " if dry_run else "") + summary + "."

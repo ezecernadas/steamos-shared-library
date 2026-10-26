@@ -16,6 +16,7 @@ import pytest
 from steamshare.adapters.steam_cdp import SteamDebuggerError, SteamDebuggerUnavailableError
 from steamshare.adapters.steam_client_api import OwnedGames
 from steamshare.cli.watch import (
+    CHANGES_PER_BATCH,
     EXIT_FAILURE,
     EXIT_OK,
     FIRST_RETRY_SECONDS,
@@ -24,11 +25,14 @@ from steamshare.cli.watch import (
     next_retry_delay,
     watch,
 )
-from steamshare.core.live_proton_mapping import CompatToolSetting, OwnedGame
+from steamshare.core.live_proton_mapping import CompatToolChange, CompatToolSetting, OwnedGame
+from steamshare.core.watch_pass_scope import GameOverview, LibrarySnapshot
 
 TOOL = "proton_experimental"
 LIBRARY = PurePosixPath("/mnt/steamlib/SteamLibrary")
 INTERVAL = 300.0
+FULL_INTERVAL = 3600.0
+STEAM_SESSION = 1793032431065.8
 
 UNMAPPED_NATIVE = CompatToolSetting("", 0)
 MAPPED = CompatToolSetting(TOOL, 250)
@@ -49,18 +53,41 @@ class FakeSteam:
 
     def __init__(self, games: list[OwnedGame]) -> None:
         self.games = games
-        self.changes: list[tuple[str, str]] = []
+        self.session = STEAM_SESSION
+        # Which games each details read asked for; None means every game.
+        self.details_reads: list[frozenset[str] | None] = []
+        # Each batch of changes asked of Steam, as (appid, tool) pairs.
+        self.batches: list[list[tuple[str, str]]] = []
         # What Steam reports after a change; by default, the requested tool.
         self.reported_after: CompatToolSetting | None = None
+        # Games whose details do not arrive after a change.
+        self.silent_after_change: set[str] = set()
 
-    def owned_games(self) -> OwnedGames:
-        return OwnedGames(games=tuple(self.games), without_details=())
+    @property
+    def changes(self) -> list[tuple[str, str]]:
+        return [change for batch in self.batches for change in batch]
 
-    def specify_compat_tool(self, appid: str, tool: str) -> CompatToolSetting:
-        self.changes.append((appid, tool))
+    def library_snapshot(self) -> LibrarySnapshot:
+        overviews = frozenset(GameOverview(game.appid, game.installed) for game in self.games)
+        return LibrarySnapshot(client_session=self.session, games=overviews)
+
+    def owned_games(self, appids: frozenset[str] | None = None) -> OwnedGames:
+        self.details_reads.append(appids)
+        wanted = [game for game in self.games if appids is None or game.appid in appids]
+        return OwnedGames(games=tuple(wanted), without_details=())
+
+    def specify_compat_tools(
+        self, changes: list[CompatToolChange]
+    ) -> dict[str, CompatToolSetting | None]:
+        self.batches.append([(change.appid, change.tool) for change in changes])
+        return {change.appid: self._reported(change) for change in changes}
+
+    def _reported(self, change: CompatToolChange) -> CompatToolSetting | None:
+        if change.appid in self.silent_after_change:
+            return None
         if self.reported_after is not None:
             return self.reported_after
-        return MAPPED if tool else UNMAPPED_NATIVE
+        return MAPPED if change.tool else UNMAPPED_NATIVE
 
 
 class Setup:
@@ -70,6 +97,8 @@ class Setup:
         # Each connection attempt takes the next outcome; past the end, Steam is up.
         self.connection_outcomes: list[Exception | None] = []
         self.waits: list[float] = []
+        # A fake clock that only moves while waiting.
+        self.now = 0.0
         # How many waits end normally; the next one sees a stop request.
         self.waits_before_stop = 0
         self.stop_after_changes: int | None = None
@@ -91,6 +120,7 @@ class Setup:
 
     def wait(self, seconds: float) -> bool:
         self.waits.append(seconds)
+        self.now += seconds
         return len(self.waits) > self.waits_before_stop
 
     def stop_requested(self) -> bool:
@@ -104,6 +134,7 @@ class Setup:
             "library": LIBRARY,
             "tool": TOOL,
             "interval": INTERVAL,
+            "full_interval": FULL_INTERVAL,
             "once": True,
             "dry_run": False,
             "verbose": False,
@@ -115,6 +146,7 @@ class Setup:
             connect_to_steam=self.connect,
             wait=self.wait,
             stop_requested=self.stop_requested,
+            clock=lambda: self.now,
         )
         return watch(argparse.Namespace(**values), system)
 
@@ -230,14 +262,45 @@ def test_a_broken_state_file_stops_the_pass_with_a_hint(
     assert "move the file away" in capsys.readouterr().err
 
 
-def test_a_stop_request_ends_the_pass_between_changes(tmp_path: Path) -> None:
-    setup = Setup(tmp_path, [LIMBO, BIGFOOT])
-    setup.stop_after_changes = 1
+def many_native_games(count: int) -> list[OwnedGame]:
+    return [owned(str(100000 + number), f"Game {number}") for number in range(count)]
+
+
+def test_changes_are_asked_of_steam_in_batches(tmp_path: Path) -> None:
+    setup = Setup(tmp_path, many_native_games(CHANGES_PER_BATCH + 1))
+
+    assert setup.run() == EXIT_OK
+
+    assert [len(batch) for batch in setup.steam.batches] == [CHANGES_PER_BATCH, 1]
+    assert len(setup.state()["managed_mappings"]) == CHANGES_PER_BATCH + 1
+
+
+def test_a_stop_request_ends_the_pass_between_batches_keeping_what_was_done(
+    tmp_path: Path,
+) -> None:
+    setup = Setup(tmp_path, many_native_games(CHANGES_PER_BATCH + 1))
+    setup.stop_after_changes = CHANGES_PER_BATCH
 
     setup.run()
 
-    assert setup.steam.changes == [("48000", TOOL)]
+    assert len(setup.steam.batches) == 1
+    assert len(setup.state()["managed_mappings"]) == CHANGES_PER_BATCH
+
+
+def test_only_the_changes_steam_confirmed_in_a_batch_are_recorded(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    setup = Setup(tmp_path, [LIMBO, BIGFOOT])
+    setup.steam.silent_after_change = {"509980"}
+
+    exit_code = setup.run()
+
+    assert exit_code == EXIT_FAILURE
+    assert setup.steam.batches == [[("48000", TOOL), ("509980", TOOL)]]
     assert setup.state()["managed_mappings"] == ["48000"]
+    output = capsys.readouterr()
+    assert "48000  LIMBO" in output.out
+    assert "509980 BIGFOOT" in output.err and "did not report" in output.err
 
 
 # --- The loop ------------------------------------------------------------------
@@ -285,3 +348,91 @@ def test_the_retry_delay_doubles_up_to_a_limit() -> None:
     assert next_retry_delay(None) == FIRST_RETRY_SECONDS
     assert next_retry_delay(FIRST_RETRY_SECONDS) == FIRST_RETRY_SECONDS * 2
     assert next_retry_delay(LONGEST_RETRY_SECONDS) == LONGEST_RETRY_SECONDS
+
+
+# --- Passes after the first ----------------------------------------------------
+
+
+def test_a_pass_over_an_unchanged_library_reads_no_details_and_prints_nothing(
+    setup: Setup, capsys: pytest.CaptureFixture[str]
+) -> None:
+    setup.waits_before_stop = 1
+
+    setup.run(once=False)
+
+    assert setup.steam.details_reads == [None]
+    output = capsys.readouterr().out
+    assert output.count("games:") == 1
+
+
+def test_a_new_game_is_the_only_one_read_and_mapped(
+    setup: Setup, capsys: pytest.CaptureFixture[str]
+) -> None:
+    setup.waits_before_stop = 1
+    original_wait = setup.wait
+
+    def buy_bigfoot_while_waiting(seconds: float) -> bool:
+        setup.steam.games = [LIMBO, COUNTER_STRIKE, BIGFOOT]
+        return original_wait(seconds)
+
+    setup.wait = buy_bigfoot_while_waiting  # type: ignore[method-assign]
+
+    setup.run(once=False)
+
+    assert setup.steam.details_reads == [None, frozenset({"509980"})]
+    assert setup.steam.changes == [("48000", TOOL), ("509980", TOOL)]
+    assert "1 changed games: 1 map" in capsys.readouterr().out
+
+
+def test_every_game_is_read_again_once_the_full_interval_has_passed(tmp_path: Path) -> None:
+    setup = Setup(tmp_path, [LIMBO])
+    setup.waits_before_stop = int(FULL_INTERVAL // INTERVAL)
+
+    setup.run(once=False)
+
+    full_reads = [read for read in setup.steam.details_reads if read is None]
+    assert len(full_reads) == 2
+
+
+def test_every_game_is_read_again_after_steam_comes_back(setup: Setup) -> None:
+    setup.connection_outcomes = [None, SteamDebuggerUnavailableError("closed")]
+    setup.waits_before_stop = 2
+
+    setup.run(once=False)
+
+    assert setup.steam.details_reads == [None, None]
+
+
+def test_every_game_is_read_again_after_steam_restarted(setup: Setup) -> None:
+    setup.waits_before_stop = 1
+    original_wait = setup.wait
+
+    def restart_steam_while_waiting(seconds: float) -> bool:
+        setup.steam.session += 1
+        return original_wait(seconds)
+
+    setup.wait = restart_steam_while_waiting  # type: ignore[method-assign]
+
+    setup.run(once=False)
+
+    assert setup.steam.details_reads == [None, None]
+
+
+def test_a_change_steam_did_not_confirm_is_tried_again_next_pass(tmp_path: Path) -> None:
+    setup = Setup(tmp_path, [LIMBO, BIGFOOT])
+    setup.steam.silent_after_change = {"509980"}
+    setup.waits_before_stop = 1
+
+    setup.run(once=False)
+
+    assert setup.steam.details_reads == [None, frozenset({"509980"})]
+    assert setup.steam.changes == [("48000", TOOL), ("509980", TOOL), ("509980", TOOL)]
+
+
+def test_a_dry_run_plans_the_same_changes_again_next_pass(setup: Setup) -> None:
+    setup.waits_before_stop = 1
+
+    setup.run(once=False, dry_run=True)
+
+    assert setup.steam.details_reads == [None, frozenset({"48000"})]
+    assert setup.steam.changes == []

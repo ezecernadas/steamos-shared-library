@@ -12,12 +12,19 @@ import pytest
 
 from steamshare.adapters.steam_cdp import SteamScriptError
 from steamshare.adapters.steam_client_api import (
+    DETAILS_READS_IN_FLIGHT,
     GAME_APP_TYPE,
     OwnedGames,
     SteamClientApi,
     SteamClientApiError,
 )
-from steamshare.core.live_proton_mapping import CompatToolSetting, OwnedGame
+from steamshare.core.live_proton_mapping import CompatToolChange, CompatToolSetting, OwnedGame
+from steamshare.core.watch_pass_scope import GameOverview, LibrarySnapshot
+
+
+def call_arguments(expression: str) -> list[object]:
+    """The JSON arguments the script was called with, read back from the expression."""
+    return json.loads(f"[{expression.rsplit('})(', 1)[1].removesuffix(')')}]")
 
 
 class FakeSession:
@@ -42,6 +49,8 @@ LIMBO_REPORT = {
         "compatToolPriority": 250,
     },
 }
+TOOL = "proton_experimental"
+
 BIGFOOT_REPORT = {
     "appid": 509980,
     "name": "BIGFOOT",
@@ -74,12 +83,26 @@ def test_reads_each_owned_game_with_its_install_folder_and_tool() -> None:
     )
 
 
-def test_asks_only_for_games() -> None:
+def test_asks_for_every_games_details_with_a_bounded_number_in_flight() -> None:
     session = FakeSession([])
 
     SteamClientApi(session).owned_games()
 
-    assert session.expressions[0].endswith(f"({GAME_APP_TYPE}, 5000)")
+    assert call_arguments(session.expressions[0]) == [
+        GAME_APP_TYPE,
+        None,
+        5000,
+        DETAILS_READS_IN_FLIGHT,
+    ]
+
+
+def test_can_ask_for_only_some_games_details() -> None:
+    session = FakeSession([])
+
+    SteamClientApi(session).owned_games(appids=frozenset({"509980", "48000"}))
+
+    # Sorted, so the same request always produces the same script.
+    assert call_arguments(session.expressions[0])[1] == [48000, 509980]
 
 
 def test_a_game_whose_details_did_not_arrive_is_listed_apart() -> None:
@@ -103,11 +126,62 @@ def test_a_missing_client_function_is_reported_as_a_steam_api_change() -> None:
         SteamClientApi(FakeSession(missing)).owned_games()
 
 
-def test_specifying_a_tool_passes_the_appid_and_tool_and_returns_the_new_setting() -> None:
-    session = FakeSession({"compatToolName": "proton_experimental", "compatToolPriority": 250})
+def test_the_library_snapshot_lists_each_game_and_the_steam_session() -> None:
+    reply = {
+        "clientSession": 1793032431065.8,
+        "games": [
+            {"appid": 48000, "installed": True},
+            {"appid": 509980, "installed": False},
+        ],
+    }
+    session = FakeSession(reply)
 
-    after = SteamClientApi(session).specify_compat_tool("48000", "proton_experimental")
+    snapshot = SteamClientApi(session).library_snapshot()
 
-    assert after == CompatToolSetting("proton_experimental", 250)
-    arguments = session.expressions[0].rsplit("(", 1)[1].rstrip(")")
-    assert json.loads(f"[{arguments}]")[:2] == [48000, "proton_experimental"]
+    assert snapshot == LibrarySnapshot(
+        client_session=1793032431065.8,
+        games=frozenset(
+            {
+                GameOverview(appid="48000", installed=True),
+                GameOverview(appid="509980", installed=False),
+            }
+        ),
+    )
+    assert call_arguments(session.expressions[0]) == [GAME_APP_TYPE]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        {"games": []},
+        {"clientSession": True, "games": []},
+        {"clientSession": 1.5, "games": [{"appid": "48000", "installed": True}]},
+    ],
+)
+def test_an_unexpected_snapshot_shape_is_an_api_error(reply: object) -> None:
+    with pytest.raises(SteamClientApiError, match="steamshare update"):
+        SteamClientApi(FakeSession(reply)).library_snapshot()
+
+
+def test_a_batch_of_changes_returns_what_steam_now_reports_for_each_game() -> None:
+    session = FakeSession(
+        [
+            {"appid": 48000, "details": {"compatToolName": TOOL, "compatToolPriority": 250}},
+            {"appid": 509980, "details": None},
+        ]
+    )
+    changes = [CompatToolChange("48000", TOOL), CompatToolChange("509980", "")]
+
+    reported = SteamClientApi(session).specify_compat_tools(changes)
+
+    # None: the game's details did not arrive after the change.
+    assert reported == {"48000": CompatToolSetting(TOOL, 250), "509980": None}
+    sent = call_arguments(session.expressions[0])[0]
+    assert sent == [{"appid": 48000, "tool": TOOL}, {"appid": 509980, "tool": ""}]
+
+
+def test_an_unexpected_batch_reply_shape_is_an_api_error() -> None:
+    session = FakeSession([{"appid": 48000, "details": {"compatToolName": TOOL}}])
+
+    with pytest.raises(SteamClientApiError, match="steamshare update"):
+        SteamClientApi(session).specify_compat_tools([CompatToolChange("48000", TOOL)])

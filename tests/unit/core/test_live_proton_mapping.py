@@ -17,13 +17,14 @@ from steamshare.core.live_proton_mapping import (
     STEAM_DEFAULT_PRIORITY,
     USER_MAPPING_PRIORITY,
     VALVE_OVERRIDE_PRIORITY,
+    CompatToolChange,
     CompatToolSetting,
     LiveDecision,
     OwnedGame,
     is_change_confirmed,
     plan_live_mappings,
     record_decision,
-    requested_compat_tool,
+    requested_change,
 )
 from steamshare.core.proton_mapping import MappingAction, SteamshareState
 
@@ -195,8 +196,14 @@ def test_a_folder_that_only_shares_the_librarys_name_prefix_is_outside_it() -> N
 
 
 def test_a_map_asks_steam_for_the_tool_and_an_unmap_for_no_tool() -> None:
-    assert requested_compat_tool(LiveDecision(game(), MappingAction.MAP), TOOL) == TOOL
-    assert requested_compat_tool(LiveDecision(game(), MappingAction.UNMAP), TOOL) == NO_COMPAT_TOOL
+    limbo = game()
+
+    assert requested_change(LiveDecision(limbo, MappingAction.MAP), TOOL) == CompatToolChange(
+        "48000", TOOL
+    )
+    assert requested_change(LiveDecision(limbo, MappingAction.UNMAP), TOOL) == CompatToolChange(
+        "48000", NO_COMPAT_TOOL
+    )
 
 
 def test_a_map_is_confirmed_when_steam_reports_the_tool_as_a_mapping() -> None:

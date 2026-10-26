@@ -251,9 +251,17 @@ def is_change(decision: LiveDecision) -> bool:
     return decision.action in CHANGE_ACTIONS
 
 
-def requested_compat_tool(decision: LiveDecision, tool: str) -> str:
-    """The tool name to hand Steam; no tool clears the mapping."""
-    return tool if decision.action is MappingAction.MAP else NO_COMPAT_TOOL
+@dataclass(frozen=True)
+class CompatToolChange:
+    """One tool to hand Steam for one game; no tool clears the mapping."""
+
+    appid: str
+    tool: str
+
+
+def requested_change(decision: LiveDecision, tool: str) -> CompatToolChange:
+    requested = tool if decision.action is MappingAction.MAP else NO_COMPAT_TOOL
+    return CompatToolChange(appid=decision.game.appid, tool=requested)
 
 
 def _map_confirmed(after: CompatToolSetting, tool: str) -> bool:
