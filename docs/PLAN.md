@@ -34,7 +34,7 @@ Each phase ends with passing tests.
 3. `force-proton`, with pytest over `config.vdf` and `appmanifest_*.acf` fixtures. **Done**, plus `watch` / `install-watch` for live mapping (see [Live mapping spike](#live-mapping-spike-2026-10-26)).
 4. Installer and uninstaller. Check that the setup survives a SteamOS update.
 5. Windows setup script.
-6. CI on GitHub Actions:
+6. **Done.** CI on GitHub Actions (`.github/workflows/ci.yml`). The runner's Azure kernel ships `ntfs3` only in `linux-modules-extra`, which the workflow installs when needed:
    - lint with `shellcheck` and `ruff`;
    - `pytest`;
    - an integration test that creates an NTFS image (`mkntfs` on a loop device), mounts it with `ntfs3`, and checks `windows_names` and the bind mounts.
