@@ -17,6 +17,10 @@ NTFS is not what breaks Steam on Linux. Linux NTFS drivers handle symlinks, and 
 
 The manual proof of concept passed: one install of a game ran on both Windows and Linux (Proton) with no re-download and a clean `chkdsk`. Tooling is not written yet. See [docs/PLAN.md](docs/PLAN.md).
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Prior art
 
 - [Proton wiki: Using a NTFS disk with Linux and Windows](https://github.com/ValveSoftware/Proton/wiki/Using-a-NTFS-disk-with-Linux-and-Windows) describes a manual `compatdata` symlink.
