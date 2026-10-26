@@ -75,6 +75,12 @@ Not yet validated: SteamOS itself (automount, `/etc` persistence across updates)
 - **The test:** `SteamClient.Apps.SpecifyCompatTool(48000, "proton_experimental")`, run with Steam open, set LIMBO to priority 250. Installing it into the shared library then downloaded the Windows build (`limbo.exe`, PE32). An empty tool name clears the mapping.
 - **Fragility:** Steam's update of 13 Oct 2026 removed the sibling `GetAvailableCompatTools`. `watch` checks every call and fails with a clear message.
 
+**End-to-end check:**
+- With `watch` running, a native game was installed with one click, without touching its properties, into the default library (the shared one). The game was Papers, Please, with separate depots: 239031 for Windows, 239033 for Linux.
+- Only the Windows depot (239031) was installed, and every binary is PE32+.
+- Of the 141 mapped games, 126 have separate per-OS depots. The rest, such as Your Only Move Is HUSTLE, ship one depot for both systems, so they install the same files either way.
+- A first full pass from an empty state mapped 141 games in 6.5 s. Right after many `SpecifyCompatTool` calls in a row, Steam answers details slowly for about a minute. Games whose details time out are retried on the next pass.
+
 This became `steamshare watch`, a user service. `force-proton` remains the offline fallback.
 
 ## Testing
