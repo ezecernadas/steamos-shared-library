@@ -28,8 +28,8 @@ A dual-boot PC running Windows and SteamOS 3.8 (reference hardware: RX 6700 XT, 
 Each phase ends with passing tests.
 
 0. **Manual spike** with one game. Confirm that the bind mount and `windows_names` work, and that Windows and SteamOS open the same install without re-downloading. This is the go/no-go gate. **Done: GO.** See [Phase 0 results](#phase-0-results).
-1. NTFS mount unit and a minimal `doctor`.
-2. Bind mounts for `compatdata` and `shadercache`.
+1. NTFS mount unit and a minimal `doctor`. **Done:** `steamshare install` and `steamshare doctor`; verified across a reboot on Zorin.
+2. Bind mounts for `compatdata` and `shadercache`. **Done** as part of `install`.
 3. `force-proton`, with pytest over `config.vdf` and `appmanifest_*.acf` fixtures.
 4. Installer and uninstaller. Check that the setup survives a SteamOS update.
 5. Windows setup script.
