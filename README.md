@@ -28,6 +28,7 @@ A dual-boot PC normally needs every game installed twice: once for Windows, once
 - [Troubleshooting](#troubleshooting)
 - [FAQ](#faq)
 - [Status and roadmap](#status-and-roadmap)
+- [AI assistance](#ai-assistance)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -230,6 +231,10 @@ It works today on a Zorin OS + Windows dual boot. In testing, a native Linux gam
 - [ ] Linux-only tools (Proton, Steam Linux Runtime) kept on an ext4 library
 
 Changes between versions are listed in [CHANGELOG.md](CHANGELOG.md).
+
+## AI assistance
+
+Most of the code and documentation in this project was written with AI assistance: Claude, by Anthropic, through Claude Code. The author directed the design, made the decisions, and tested the tool on real hardware. Every change runs through the CI described above, which runs the unit tests on Python 3.11 to 3.13, integration tests on a real `ntfs3` mount, and the Windows script's tests.
 
 ## Contributing
 

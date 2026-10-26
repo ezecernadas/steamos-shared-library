@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- An "AI assistance" section in the README that says how the project was built.
+
 ## [0.1.0] - 2026-10-26
 
 First pre-release. Tested end to end on Zorin OS 18 with Windows; not yet validated on SteamOS.
