@@ -116,6 +116,7 @@ Everything runs through `./steamshare` in the repository folder:
 | Command | What it does |
 |---|---|
 | `sudo ./steamshare install` | Sets up the mounts and the watch service. Safe to run again: it changes only what is out of date, and backs up anything it replaces. |
+| `sudo ./steamshare uninstall` | Removes what `install` set up and keeps your data; see [Safety and uninstalling](#safety-and-uninstalling). |
 | `./steamshare doctor --library <path>` | Checks the whole setup and says what to fix. |
 | `./steamshare force-proton --library <path> --keep-native <appid>` | Lets a game use its native Linux build. Windows can no longer run it from the shared library, so such games are better installed in a separate Linux library. |
 | `./steamshare watch --library <path> --once --dry-run` | Shows what the watch service would change right now. |
@@ -150,21 +151,18 @@ The Windows script takes `-Library <path>`, `-Yes`, and `-WhatIf` (a dry run).
 - **Steam's debugger listens on `127.0.0.1` only.** No other machine can reach it, but any program on your PC can, as with Decky Loader. Delete `~/.steam/steam/.cef-enable-remote-debugging` and restart Steam to turn it off.
 - **Game files are never modified.** steamshare only changes how they are mounted and which build Steam downloads.
 
-An `uninstall` command is planned. Until then, these steps undo everything; they assume the default mount point `/mnt/steamlib` and library folder `SteamLibrary`:
+To undo the setup:
 
 ```bash
-systemctl --user disable --now steamshare-watch.service
-rm ~/.config/systemd/user/steamshare-watch.service
-sudo systemctl disable --now \
-  mnt-steamlib-SteamLibrary-steamapps-compatdata.mount \
-  mnt-steamlib-SteamLibrary-steamapps-shadercache.mount \
-  mnt-steamlib.mount
-sudo rm /etc/systemd/system/steamshare-ntfs3.service /etc/systemd/system/mnt-steamlib*.mount
-sudo systemctl daemon-reload
-rm ~/.steam/steam/.cef-enable-remote-debugging
+./steamshare uninstall --dry-run   # what it would remove and keep; needs no sudo
+sudo ./steamshare uninstall
 ```
 
-The Proton choices `watch` made stay in Steam; change any of them in the game's *Properties → Compatibility*.
+It finds what `install` set up by the header of the generated files, never by name, shows the plan, and asks before removing anything (the default answer is no; `--yes` skips the question).
+
+- **Removed:** the watch service, the mount units and the `ntfs3` loader (stopped first, the bind mounts before the NTFS mount), the backups `install` made of them, steamshare's state file, and the mount point folder if it is empty.
+- **Kept:** the Proton prefixes and shader caches in `~/.local/share/steam-shared/` (some games keep their saves there), the Proton choices `watch` made in Steam (undoing them would make Steam re-download native games as their Linux build; change one in the game's *Properties → Compatibility*), this repository, and the files on the NTFS partition.
+- **Steam's debugger flag** is kept too, since other tools such as Decky Loader may use it. Add `--remove-debugger-flag` to delete it.
 
 ## Troubleshooting
 
@@ -175,7 +173,6 @@ Start with `./steamshare doctor --library <path>`. Every failure it reports incl
 | The library is read-only, or not mounted, on Linux | Windows left the volume dirty. On Windows, run `windows\setup.ps1`, then shut down fully. If it persists, run `chkdsk <drive>: /f` on Windows. |
 | `unknown filesystem type 'ntfs3'` | Your distro blacklists the module. `install` loads it at boot; for a manual mount, run `sudo modprobe ntfs3` first. |
 | Installing a game on Linux downloaded the Linux build | Steam was not restarted after `install`, so `watch` could not reach it. Check with `journalctl --user -u steamshare-watch.service`. |
-| Steam is stuck on *Loading user data* | Usually a Steam outage, not your setup. Check [steamstat.us](https://steamstat.us) before changing anything. |
 
 ## FAQ
 
@@ -203,7 +200,7 @@ It works today on a Zorin OS + Windows dual boot. In testing, a native Linux gam
 - [x] Windows setup script
 - [x] Continuous integration
 - [ ] Validation on SteamOS itself: read-only root, A/B updates, Game Mode
-- [ ] `uninstall` command
+- [x] `uninstall` command
 - [ ] Linux-only tools (Proton, Steam Linux Runtime) kept on an ext4 library
 
 ## Contributing

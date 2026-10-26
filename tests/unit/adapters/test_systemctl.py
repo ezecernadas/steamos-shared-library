@@ -3,10 +3,13 @@
 from collections.abc import Sequence
 
 from steamshare.adapters.systemctl import (
+    daemon_reload_command,
+    disable_now_command,
     enable_units_now,
     plan_enable_commands,
     plan_restart_commands,
     run_commands,
+    stop_command,
     user_systemctl,
 )
 
@@ -52,3 +55,14 @@ def test_planned_commands_run_in_order() -> None:
     run_commands([["a"], ["b", "c"]], run=commands.append)
 
     assert commands == [["a"], ["b", "c"]]
+
+
+def test_uninstall_commands_disable_stop_and_reload_one_unit_at_a_time() -> None:
+    assert disable_now_command("a.mount") == ["systemctl", "disable", "--now", "a.mount"]
+    assert stop_command("s.service") == ["systemctl", "stop", "s.service"]
+    assert daemon_reload_command(systemctl=user_systemctl("player")) == [
+        "systemctl",
+        "--user",
+        "--machine=player@",
+        "daemon-reload",
+    ]

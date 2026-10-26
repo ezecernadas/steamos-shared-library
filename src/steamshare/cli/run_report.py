@@ -1,4 +1,4 @@
-"""How `install` lays out what it reports: sections, aligned status lines, short paths.
+"""How commands lay out what they report: sections, aligned status lines, short paths.
 
 Why this exists: install touches a dozen files in three folders, and one
 line per file with its full path and full backup path read as a wall of
@@ -12,7 +12,8 @@ text. So the report:
 - sums up the backups once at the end, and ends with numbered next steps.
 
 Everything here is pure: it builds strings and prints nothing, so the layout
-is tested line by line. `install` and `watch_service_setup` do the printing.
+is tested line by line. The commands (`install` with `watch_service_setup`,
+and `uninstall`) do the printing.
 """
 
 import codecs
@@ -167,6 +168,11 @@ class RunReport:
     # The desktop user's home, not root's: install runs under sudo.
     home: PurePosixPath
     dry_run: bool
+    # How wide the status-word column is after a real run and in a dry run.
+    # The defaults fit install's words; a command with other words passes
+    # the length of its longest ones.
+    done_word_width: int = DONE_WORD_WIDTH
+    planned_word_width: int = PLANNED_WORD_WIDTH
 
     def section(self, title: str, folder: PurePosixPath | None = None) -> str:
         return section_header(title, None if folder is None else shorten_home(folder, self.home))
@@ -200,7 +206,7 @@ class RunReport:
 
     @property
     def _word_width(self) -> int:
-        return PLANNED_WORD_WIDTH if self.dry_run else DONE_WORD_WIDTH
+        return self.planned_word_width if self.dry_run else self.done_word_width
 
 
 # --- Closing -----------------------------------------------------------------
@@ -226,14 +232,21 @@ def combine_notes(*notes: ClosingNotes) -> ClosingNotes:
     )
 
 
-def format_closing(notes: ClosingNotes, *, dry_run: bool) -> list[str]:
+INSTALL_DONE_HEADLINE = "Done. Next steps:"
+INSTALL_DRY_RUN_HEADLINE = "Nothing was changed. After a real install, the next steps are:"
+
+
+def format_closing(
+    notes: ClosingNotes,
+    *,
+    dry_run: bool,
+    done_headline: str = INSTALL_DONE_HEADLINE,
+    dry_run_headline: str = INSTALL_DRY_RUN_HEADLINE,
+) -> list[str]:
     """Return the end of the report: where backups went, then the numbered next steps."""
     note = _planned_backup_note(notes) if dry_run else _done_backup_note(notes)
     lines = [] if note is None else [note, ""]
-    if dry_run:
-        lines.append("Nothing was changed. After a real install, the next steps are:")
-    else:
-        lines.append("Done. Next steps:")
+    lines.append(dry_run_headline if dry_run else done_headline)
     lines += [f"{INDENT}{number}. {step}" for number, step in enumerate(notes.next_steps, 1)]
     lines += [f"{INDENT}{label}:{COLUMN_GAP}{command}" for label, command in notes.tips]
     return lines

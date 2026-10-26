@@ -20,6 +20,7 @@ from steamshare.cli.install_choices import (
     resolve_choices,
     summary_fields,
 )
+from steamshare.cli.shared import CommandError
 from steamshare.core.ntfs_partitions import (
     NtfsPartition,
     PartitionContents,
@@ -319,7 +320,7 @@ def test_a_failed_look_inside_is_named_in_the_error() -> None:
 
 
 def test_input_ending_at_a_prompt_stops_without_a_traceback() -> None:
-    with pytest.raises(InstallError, match="nothing was changed"):
+    with pytest.raises(CommandError, match="nothing was changed"):
         resolve(ScriptedConsole([]))
 
 

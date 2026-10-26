@@ -1,4 +1,4 @@
-"""Tell systemd about new unit files, and start or restart them.
+"""Tell systemd about new or removed unit files, and start, restart or stop them.
 
 Commands run without a shell, so no path or unit name is ever interpreted
 by one. The runner is a parameter so tests can record the commands instead.
@@ -41,9 +41,26 @@ def plan_enable_commands(
     """Return the commands that start the units now and at every boot."""
     return [
         # Without the reload, systemd keeps using the unit files it read last.
-        [*systemctl, "daemon-reload"],
+        daemon_reload_command(systemctl=systemctl),
         [*systemctl, "enable", "--now", *unit_names],
     ]
+
+
+def daemon_reload_command(*, systemctl: Sequence[str] = SYSTEM_SYSTEMCTL) -> list[str]:
+    """Return the command that makes systemd reread its unit files, new or removed."""
+    return [*systemctl, "daemon-reload"]
+
+
+def disable_now_command(
+    unit_name: str, *, systemctl: Sequence[str] = SYSTEM_SYSTEMCTL
+) -> list[str]:
+    """Return the command that stops a unit now and unlinks it from boot."""
+    return [*systemctl, "disable", "--now", unit_name]
+
+
+def stop_command(unit_name: str, *, systemctl: Sequence[str] = SYSTEM_SYSTEMCTL) -> list[str]:
+    """Return the command that stops a unit that was never enabled."""
+    return [*systemctl, "stop", unit_name]
 
 
 def plan_restart_commands(

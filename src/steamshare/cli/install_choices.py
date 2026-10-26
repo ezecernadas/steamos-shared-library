@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 from steamshare.adapters.console import Console
+from steamshare.cli.questions import ask_numbered, ask_yes_no
+from steamshare.cli.shared import CommandError
 from steamshare.core.ntfs_partitions import (
     NtfsPartition,
     PartitionFacts,
@@ -28,12 +30,11 @@ from steamshare.core.ntfs_partitions import (
     is_recommended,
     suggest_default,
 )
-from steamshare.core.prompt_answers import parse_numbered_choice, parse_yes_no
 from steamshare.core.systemd_units import partition_device
 
 
-class InstallError(Exception):
-    """An expected failure, with a message that says what to do next."""
+class InstallError(CommandError):
+    """An expected failure of `install`, with a message that says what to do next."""
 
 
 @dataclass(frozen=True)
@@ -148,14 +149,14 @@ def _pick_partition(
             + _partition_flags_hint(facts_list, can_take_suggestion=default is not None)
         )
     while True:
-        position = _ask_numbered(
+        position = ask_numbered(
             console, "Which partition holds the shared library?", len(facts_list), default
         )
         chosen = facts_list[position]
         if is_recommended(classify(chosen)):
             return chosen
         question = f"{chosen.partition.device}: {describe(chosen)}. Use it anyway?"
-        if _ask_yes_no(console, question, default=False):
+        if ask_yes_no(console, question, default=False):
             return chosen
 
 
@@ -214,7 +215,7 @@ def _pick_library_folder(
             f"install cannot ask which library to share, because input is not a terminal. "
             f"{flag_hint}"
         )
-    return folders[_ask_numbered(console, "Which library should be shared?", len(folders), None)]
+    return folders[ask_numbered(console, "Which library should be shared?", len(folders), None)]
 
 
 # --- Confirmation ------------------------------------------------------------
@@ -256,42 +257,5 @@ def confirm_install(
     # terminal, every choice already came from flags, as scripts expect.
     if assume_yes or dry_run or not console.is_interactive:
         return
-    if not _ask_yes_no(console, "Proceed?", default=True):
+    if not ask_yes_no(console, "Proceed?", default=True):
         raise InstallError("Cancelled; nothing was changed.")
-
-
-# --- Asking ------------------------------------------------------------------
-
-# Shown after an accepted answer, so the question stands apart from what follows.
-ANSWERED_SEPARATOR = ""
-
-
-def _ask_numbered(console: Console, question: str, option_count: int, default: int | None) -> int:
-    default_hint = f" [{default + 1}]" if default is not None else ""
-    while True:
-        answer = _ask(console, f"{question}{default_hint}: ")
-        position = parse_numbered_choice(answer, option_count=option_count, default=default)
-        if position is not None:
-            console.show(ANSWERED_SEPARATOR)
-            return position
-        console.show(f"Please answer a number from 1 to {option_count}.")
-
-
-def _ask_yes_no(console: Console, question: str, *, default: bool) -> bool:
-    options = "[Y/n]" if default else "[y/N]"
-    while True:
-        answer = parse_yes_no(_ask(console, f"{question} {options}: "), default=default)
-        if answer is not None:
-            console.show(ANSWERED_SEPARATOR)
-            return answer
-        console.show("Please answer y or n.")
-
-
-def _ask(console: Console, prompt: str) -> str:
-    try:
-        return console.ask(prompt)
-    except (EOFError, KeyboardInterrupt) as error:
-        # Ctrl+D, Ctrl+C, or input that ran out: an expected way to stop.
-        raise InstallError(
-            "Stopped at the prompt; nothing was changed. Run install again to start over."
-        ) from error

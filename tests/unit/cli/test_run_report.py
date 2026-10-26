@@ -209,3 +209,29 @@ def test_combined_notes_keep_the_order_of_their_parts() -> None:
 
     assert combined.next_steps == ("one", "two")
     assert combined.tips == (("a", "x"),)
+
+
+# --- Other commands ----------------------------------------------------------
+
+
+def test_a_command_with_longer_status_words_sets_its_own_column_widths() -> None:
+    wide = RunReport(
+        symbols=UNICODE_SYMBOLS,
+        home=HOME,
+        dry_run=True,
+        done_word_width=8,
+        planned_word_width=13,
+    )
+
+    assert wide.planned("would disable", "a.mount") == "  · would disable  a.mount"
+    assert wide.planned("would stop", "b.service") == "  · would stop     b.service"
+
+
+def test_the_closing_headlines_can_be_a_commands_own() -> None:
+    notes = ClosingNotes(next_steps=("Step.",))
+
+    lines = format_closing(
+        notes, dry_run=True, done_headline="All gone.", dry_run_headline="Nothing changed."
+    )
+
+    assert lines == ["Nothing changed.", "  1. Step."]

@@ -22,7 +22,7 @@ A dual-boot PC running Windows and SteamOS 3.8 (reference hardware: RX 6700 XT, 
 | `steamshare` launcher | A thin bash script at the repository root that runs `python3 -m steamshare` with `src/` on `PYTHONPATH`, after checking the Python version (`src/steamshare/python_requirement.py`). Users need no `uv`, virtual environment or packaging step, and the watch service's `ExecStart=` runs it by absolute path, so the repository must stay where install ran from. |
 | Linux tools library | Proton and Steam Linux Runtime are installed into the same library as the game unless told otherwise. A dedicated ext4 library keeps those tools (about 1.4 GB and 3,000+ symlinks) off NTFS. |
 | `doctor` | Health check: the mount is `ntfs3` (not `fuseblk`), the volume is neither dirty nor read-only, the bind mounts are active, and there are no Windows-invalid names on NTFS. It also lists symlinks on NTFS outside the known Linux-tool folders (Linux Steam creates `steamapps/common/Steam.dll` as a symlink to `~/.steam/.../legacycompat`). |
-| `install.sh` / `uninstall.sh` | Idempotent setup and teardown; they detect the partition by UUID. |
+| `install` / `uninstall` | `sudo ./steamshare install` and `sudo ./steamshare uninstall`, run through the `steamshare` launcher. Idempotent setup and teardown: install mounts the partition by UUID and sets up `watch`; uninstall finds the units by their generated header and removes them, keeping the ext4 Proton prefixes. Both take `--dry-run`. |
 | `windows/setup.ps1` | Disables Fast Startup and hibernation, and checks the library: folder, NTFS, dirty bit, and registration in Windows Steam. Without `-Library`, it detects the library among the NTFS ones Windows Steam knows outside the system drive. |
 
 ## Phases
@@ -33,7 +33,7 @@ Each phase ends with passing tests.
 1. NTFS mount unit and a minimal `doctor`. **Done:** `steamshare install` and `steamshare doctor`; verified across a reboot on Zorin.
 2. Bind mounts for `compatdata` and `shadercache`. **Done** as part of `install`.
 3. `force-proton`, with pytest over `config.vdf` and `appmanifest_*.acf` fixtures. **Done**, plus `watch` (set up by `install`) for live mapping (see [Live mapping spike](#live-mapping-spike-2026-10-26)).
-4. Installer and uninstaller. Check that the setup survives a SteamOS update.
+4. Installer and uninstaller. Check that the setup survives a SteamOS update. **Uninstaller done:** `steamshare uninstall` finds steamshare's units by their generated header (never by name), disables the bind mounts before the NTFS mount, stops the `ntfs3` loader, and removes the unit files, their backups and the state file. It keeps the ext4 Proton prefixes, the Proton choices `watch` made in Steam (undoing them would re-download native games as their Linux build), and Steam's debugger flag unless `--remove-debugger-flag` is given. The SteamOS update check is still open.
 5. Windows setup script. **Done:** `windows/setup.ps1`, with Pester tests and PSScriptAnalyzer in CI under Windows PowerShell 5.1 and PowerShell 7.
 6. **Done.** CI on GitHub Actions (`.github/workflows/ci.yml`). The runner's Azure kernel ships `ntfs3` only in `linux-modules-extra`, which the workflow installs when needed:
    - lint with `shellcheck` and `ruff`;

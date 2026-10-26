@@ -69,6 +69,7 @@ from steamshare.cli.shared import (
     LAUNCHER_COMMAND,
     ROOT_USER_ID,
     SUDO_INSTALL_COMMAND,
+    CommandError,
     absolute_path,
     relative_folder,
 )
@@ -243,7 +244,7 @@ def install(arguments: argparse.Namespace, system: System) -> int:
         notes = combine_notes(mounts_notes, watch_notes, _check_setup_notes(config))
         for line in format_closing(notes, dry_run=arguments.dry_run):
             print(line)
-    except (InstallError, PartitionCleanupError) as error:
+    except (CommandError, PartitionCleanupError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return EXIT_FAILURE
     return EXIT_OK

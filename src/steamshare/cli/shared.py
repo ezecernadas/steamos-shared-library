@@ -1,4 +1,4 @@
-"""Argument types and constants shared by several commands.
+"""Argument types, constants and the error type shared by several commands.
 
 They live here, not in one command's module, so a command never imports
 another command.
@@ -13,6 +13,15 @@ ROOT_USER_ID = 0
 # repository root, from the repository folder, as the README shows.
 LAUNCHER_COMMAND = "./steamshare"
 SUDO_INSTALL_COMMAND = f"sudo {LAUNCHER_COMMAND} install"
+SUDO_UNINSTALL_COMMAND = f"sudo {LAUNCHER_COMMAND} uninstall"
+
+
+class CommandError(Exception):
+    """An expected failure, with a message that says what to do next.
+
+    A command prints it as `Error: <message>` and exits with 1, never with a
+    traceback (CONTRIBUTING.md, rule 7).
+    """
 
 
 def absolute_path(value: str) -> PurePosixPath:
