@@ -23,6 +23,7 @@ from steamshare.adapters.state_file import (
     write_state,
 )
 from steamshare.adapters.steam_config import (
+    DEFAULT_STEAM_ROOT,
     SteamConfigError,
     read_steam_config,
     steam_config_path,
@@ -31,6 +32,7 @@ from steamshare.adapters.steam_config import (
 from steamshare.adapters.steam_process import is_steam_running
 from steamshare.core.library_layout import STEAMAPPS_DIRECTORY
 from steamshare.core.proton_mapping import (
+    DEFAULT_PROTON_TOOL,
     LibraryApp,
     MappingPlan,
     SteamshareState,
@@ -44,14 +46,6 @@ from steamshare.core.vdf import KeyValues
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
-
-DEFAULT_TOOL = "proton_experimental"
-
-# A symlink to the real install on both Debian/Ubuntu
-# (~/.steam/debian-installation) and SteamOS/Arch (~/.local/share/Steam).
-# The Flatpak lives in ~/.var/app/com.valvesoftware.Steam/.local/share/Steam
-# and needs --steam-root.
-DEFAULT_STEAM_ROOT = Path.home() / ".steam" / "steam"
 
 # The longest action label, so the appid column lines up.
 ACTION_COLUMN_WIDTH = 26
@@ -92,8 +86,8 @@ def add_parser(subcommands: "argparse._SubParsersAction[argparse.ArgumentParser]
     )
     parser.add_argument(
         "--tool",
-        default=DEFAULT_TOOL,
-        help=f"the compatibility tool to force (default: {DEFAULT_TOOL})",
+        default=DEFAULT_PROTON_TOOL,
+        help=f"the compatibility tool to force (default: {DEFAULT_PROTON_TOOL})",
     )
     parser.add_argument(
         "--keep-native",

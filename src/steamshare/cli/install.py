@@ -21,10 +21,16 @@ from steamshare.adapters.unit_installer import (
     SYSTEM_UNIT_DIRECTORY,
     ChangeOwner,
     DirectoryOutcome,
-    FileAction,
-    UnitFileOutcome,
     create_owned_directories,
     install_unit_files,
+)
+from steamshare.cli.shared import (
+    DONE_ACTION_LABELS,
+    PLANNED_ACTION_LABELS,
+    ROOT_USER_ID,
+    absolute_path,
+    folder_name,
+    format_outcome,
 )
 from steamshare.core.systemd_units import (
     InstallConfig,
@@ -37,23 +43,10 @@ from steamshare.core.systemd_units import (
 EXIT_OK = 0
 EXIT_FAILURE = 1
 
-ROOT_USER_ID = 0
 
 # Under sudo, root's PATH usually has no `uv`, so the hint calls the
 # project's virtual environment directly, from the repository root.
 SUDO_COMMAND_PREFIX = "sudo .venv/bin/python -m steamshare install"
-
-# How each outcome reads, before (dry run) and after it happened.
-PLANNED_ACTION_LABELS = {
-    FileAction.UNCHANGED: "unchanged",
-    FileAction.CREATED: "would create",
-    FileAction.UPDATED: "would update (old file backed up first)",
-}
-DONE_ACTION_LABELS = {
-    FileAction.UNCHANGED: "unchanged",
-    FileAction.CREATED: "created",
-    FileAction.UPDATED: "updated",
-}
 
 
 @dataclass(frozen=True)
@@ -99,24 +92,6 @@ def add_parser(subcommands: "argparse._SubParsersAction[argparse.ArgumentParser]
         help="print the units and planned changes without writing anything",
     )
     parser.set_defaults(run=run)
-
-
-def absolute_path(value: str) -> PurePosixPath:
-    # systemd only accepts absolute paths in Where=.
-    path = PurePosixPath(value)
-    if not path.is_absolute() or path == PurePosixPath("/"):
-        raise argparse.ArgumentTypeError(
-            f"{value!r} must be an absolute folder below /, such as /mnt/steamlib"
-        )
-    return path
-
-
-def folder_name(value: str) -> str:
-    if not value or "/" in value or value in (".", ".."):
-        raise argparse.ArgumentTypeError(
-            f"{value!r} must be a single folder name, such as SteamLibrary"
-        )
-    return value
 
 
 def run(arguments: argparse.Namespace) -> int:
@@ -250,12 +225,3 @@ def _create_data_directories(
 
 def _names_to_enable(units: list[UnitFile]) -> list[str]:
     return [unit.name for unit in units if unit.enable_at_boot]
-
-
-def format_outcome(
-    outcome: UnitFileOutcome | DirectoryOutcome, labels: dict[FileAction, str]
-) -> str:
-    line = f"  {labels[outcome.action]}: {outcome.path}"
-    if isinstance(outcome, UnitFileOutcome) and outcome.backup is not None:
-        line += f" (backup: {outcome.backup})"
-    return line

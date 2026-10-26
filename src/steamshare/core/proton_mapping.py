@@ -45,6 +45,10 @@ MANIFEST_APPID_KEY = "appid"
 MANIFEST_NAME_KEY = "name"
 MANIFEST_INSTALLDIR_KEY = "installdir"
 
+# The tool forced unless the user picks another. Proton Experimental runs the
+# widest range of games, and it is the one Phase 0 verified.
+DEFAULT_PROTON_TOOL = "proton_experimental"
+
 # Steamworks Common Redistributables (DirectX, VC++ runtimes and the like).
 # Steam installs it into any library that holds a game needing it. It is not
 # a game anyone launches, so there is nothing to force.
@@ -71,12 +75,20 @@ class SteamshareState:
 
 
 class MappingAction(Enum):
+    """What happens to one app; the value is the reason printed next to it."""
+
     MAP = "map"
     ALREADY_MAPPED = "already mapped (managed)"
     UNMAP = "unmap (keep native)"
     SKIPPED_USER_MAPPING = "skipped (user mapping)"
     SKIPPED_TOOL = "skipped (tool)"
     SKIPPED_KEEP_NATIVE = "skipped (keep native)"
+    # Only `watch` decides these: it sees what the running Steam client
+    # reports (`core.live_proton_mapping`), which config.vdf does not hold.
+    SKIPPED_VALVE_OVERRIDE = "skipped (Valve's choice)"
+    WINDOWS_ONLY = "nothing to do (Windows-only)"
+    SKIPPED_UNRECOGNIZED_TOOL = "skipped (unrecognized tool)"
+    SKIPPED_OUTSIDE_LIBRARY = "skipped (installed elsewhere)"
 
 
 @dataclass(frozen=True)

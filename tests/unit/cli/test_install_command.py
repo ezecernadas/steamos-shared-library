@@ -16,10 +16,9 @@ from steamshare.cli.install import (
     EXIT_FAILURE,
     EXIT_OK,
     System,
-    absolute_path,
-    folder_name,
     install,
 )
+from steamshare.cli.shared import absolute_path, folder_name
 
 USER = InvokingUser(user_id=1000, group_id=1000, home=PurePosixPath("/home/ezecer"))
 EXPECTED_UNITS = [

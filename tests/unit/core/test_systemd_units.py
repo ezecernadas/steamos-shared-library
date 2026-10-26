@@ -13,15 +13,20 @@ import pytest
 from steamshare.core.systemd_units import (
     GENERATED_HEADER,
     NTFS3_LOADER_SERVICE,
+    WATCH_SERVICE,
     InstallConfig,
     UnitFile,
+    WatchServiceConfig,
     build_units,
     escape_unit_path,
+    generated_header,
     linux_only_data_paths,
     mount_unit_name,
+    quote_exec_argument,
     render_bind_mount,
     render_ntfs3_loader_service,
     render_ntfs_mount,
+    render_watch_service,
 )
 
 CONFIG = InstallConfig(
@@ -197,3 +202,59 @@ def test_percent_signs_in_paths_are_escaped_so_systemd_does_not_expand_them() ->
     )
 
     assert "Where=/mnt/100%%" in lines_of(render_ntfs_mount(config))
+
+
+# --- The watch service ---------------------------------------------------------
+
+WATCH_CONFIG = WatchServiceConfig(
+    python=PurePosixPath("/home/ezecer/steamshare/.venv/bin/python"),
+    library=PurePosixPath("/mnt/steamlib/SteamLibrary"),
+    tool="proton_experimental",
+    steam_root=PurePosixPath("/home/ezecer/.steam/steam"),
+)
+
+
+def test_the_watch_service_runs_watch_with_this_python_for_the_library() -> None:
+    unit = render_watch_service(WATCH_CONFIG)
+
+    assert unit.name == WATCH_SERVICE
+    assert unit.enable_at_boot
+    assert (
+        "ExecStart=/home/ezecer/steamshare/.venv/bin/python -m steamshare watch "
+        "--library /mnt/steamlib/SteamLibrary --tool proton_experimental "
+        "--steam-root /home/ezecer/.steam/steam"
+    ) in lines_of(unit)
+
+
+def test_the_watch_service_restarts_on_failure_and_starts_with_the_session() -> None:
+    lines = lines_of(render_watch_service(WATCH_CONFIG))
+
+    assert "Restart=on-failure" in lines
+    assert "WantedBy=default.target" in lines
+
+
+def test_the_watch_service_says_which_command_generated_it() -> None:
+    unit = render_watch_service(WATCH_CONFIG)
+
+    assert unit.content.startswith(generated_header("install-watch"))
+    assert "`python -m steamshare install-watch`" in unit.content
+
+
+def test_install_units_keep_their_header() -> None:
+    assert generated_header("install") == GENERATED_HEADER
+
+
+@pytest.mark.parametrize(
+    ("argument", "expected"),
+    [
+        ("/mnt/steam lib", '"/mnt/steam lib"'),
+        ("/mnt/100%", "/mnt/100%%"),
+        ("/mnt/$HOME", "/mnt/$$HOME"),
+        ('/mnt/a"b', '"/mnt/a\\"b"'),
+        ("/mnt/a\\b", '"/mnt/a\\\\b"'),
+    ],
+)
+def test_exec_arguments_are_quoted_so_systemd_reads_them_literally(
+    argument: str, expected: str
+) -> None:
+    assert quote_exec_argument(argument) == expected

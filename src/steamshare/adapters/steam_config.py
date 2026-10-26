@@ -11,6 +11,12 @@ from pathlib import Path
 from steamshare.adapters.safe_writes import back_up_file, write_file_atomically
 from steamshare.core.vdf import KeyValues, parse_vdf, serialize_vdf
 
+# A symlink to the real install on both Debian/Ubuntu
+# (~/.steam/debian-installation) and SteamOS/Arch (~/.local/share/Steam).
+# The Flatpak lives in ~/.var/app/com.valvesoftware.Steam/.local/share/Steam
+# and needs --steam-root.
+DEFAULT_STEAM_ROOT = Path.home() / ".steam" / "steam"
+
 # Relative to the Steam root, the same on every install type (Debian package,
 # SteamOS, Flatpak).
 CONFIG_RELATIVE_PATH = Path("config") / "config.vdf"

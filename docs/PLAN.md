@@ -18,6 +18,7 @@ A dual-boot PC running Windows and SteamOS 3.8 (reference hardware: RX 6700 XT, 
 | NTFS mount unit | Mounts the library partition at boot. It is a `systemd` unit in `/etc/systemd/system/` (survives SteamOS A/B updates) using `ntfs3` with `uid=1000,gid=1000,umask=022,windows_names,nofail`. Some distros blacklist `ntfs3` (Zorin ships `/etc/modprobe.d/zorin-blacklist-ntfs3.conf`), so a oneshot `steamshare-ntfs3.service` runs `modprobe ntfs3` by name before the mount, without touching the distro blacklist. `/etc/modules-load.d` does not work here: `systemd-modules-load` honors the blacklist ("Module 'ntfs3' is deny-listed (by kmod)"), and so does the kernel's alias autoload on `mount -t ntfs3`. |
 | Bind-mount units | Mount `~/.local/share/steam-shared/{compatdata,shadercache}` (ext4) over `SteamLibrary/steamapps/{compatdata,shadercache}`. They have `Requires=`/`After=` on the NTFS mount. |
 | `force-proton` | A Python tool with its own small VDF parser (no third-party packages; see [CONTRIBUTING.md](../CONTRIBUTING.md)). It writes `CompatToolMapping` in `config.vdf` for every app in the shared library that ships a native Linux build. It refuses to run while Steam is open, and backs up first. It must run **before** the library is added to Linux Steam (or before Steam next starts); otherwise Steam queues the Linux depot. |
+| `watch` / `install-watch` | `force-proton`, live: a user service that, while Steam runs, maps every native Linux game (not installed, or installed in the shared library) to Proton through Steam's own client API, over the Chrome DevTools Protocol on 127.0.0.1:8080, the same mechanism Decky Loader uses. Clicking "Install" then fetches the Windows build. Valve's per-title choices (priority 90-100) and user mappings (250) are left alone. `install-watch` creates `~/.steam/steam/.cef-enable-remote-debugging`, which turns the debugger on at Steam's next start, and enables `~/.config/systemd/user/steamshare-watch.service`. It shares the state file with `force-proton`. |
 | Linux tools library | Proton and Steam Linux Runtime are installed into the same library as the game unless told otherwise. A dedicated ext4 library keeps those tools (about 1.4 GB and 3,000+ symlinks) off NTFS. |
 | `doctor` | Health check: the mount is `ntfs3` (not `fuseblk`), the volume is neither dirty nor read-only, the bind mounts are active, and there are no Windows-invalid names on NTFS. It also lists symlinks on NTFS outside the known Linux-tool folders (Linux Steam creates `steamapps/common/Steam.dll` as a symlink to `~/.steam/.../legacycompat`). |
 | `install.sh` / `uninstall.sh` | Idempotent setup and teardown; they detect the partition by UUID. |
@@ -30,7 +31,7 @@ Each phase ends with passing tests.
 0. **Manual spike** with one game. Confirm that the bind mount and `windows_names` work, and that Windows and SteamOS open the same install without re-downloading. This is the go/no-go gate. **Done: GO.** See [Phase 0 results](#phase-0-results).
 1. NTFS mount unit and a minimal `doctor`. **Done:** `steamshare install` and `steamshare doctor`; verified across a reboot on Zorin.
 2. Bind mounts for `compatdata` and `shadercache`. **Done** as part of `install`.
-3. `force-proton`, with pytest over `config.vdf` and `appmanifest_*.acf` fixtures.
+3. `force-proton`, with pytest over `config.vdf` and `appmanifest_*.acf` fixtures. **Done**, plus `watch` / `install-watch` for live mapping (see [Live mapping spike](#live-mapping-spike-2026-10-26)).
 4. Installer and uninstaller. Check that the setup survives a SteamOS update.
 5. Windows setup script.
 6. CI on GitHub Actions:
@@ -61,6 +62,20 @@ Run on 2026-10-26 on a Zorin OS 18 laptop (kernel 7.0, `ntfs3`) dual-booting Win
 - Linux Steam rewrites `appmanifest_*.acf`: it drops `LauncherPath` and changes `DownloadType` and `TargetBuildID`. Windows Steam accepted the result.
 
 Not yet validated: SteamOS itself (automount, `/etc` persistence across updates), games with anti-cheat, and switching OS repeatedly over time.
+
+## Live mapping spike (2026-10-26)
+
+`force-proton` edits `config.vdf`, which only works while Steam is closed: Steam keeps the file in memory and writes it back. To make "click Install in Steam" fetch the Windows build with no extra step, Proton has to be forced live. This spike tested the mechanism Decky Loader uses.
+
+**Results:**
+- **Debugger:** an empty `~/.steam/steam/.cef-enable-remote-debugging` makes Steam (after a restart) expose the Chrome DevTools Protocol on `127.0.0.1:8080`, bound to localhost only. The `SharedJSContext` target runs Steam's own UI scripts.
+- **Owned games:** `collectionStore.allAppsCollection.allApps` lists them (615 here). `SteamClient.Apps.RegisterForAppDetails` gives each game's `strCompatToolName`, `nCompatToolPriority` and `strInstallFolder`.
+- **`vecPlatforms` cannot detect native builds:** it lists `linux` for 604 of 614 games. Native games are recognized by their default tool instead (`steamlinuxruntime*`, or none).
+- **Priorities:** 250 is a user mapping (or one made with `SpecifyCompatTool`); 90-100 is Valve's per-title choice (CS2, Baldur's Gate 3), which must not be overridden; 75 is Steam's default; 0 is a native game without a runtime.
+- **The test:** `SteamClient.Apps.SpecifyCompatTool(48000, "proton_experimental")`, run with Steam open, set LIMBO to priority 250. Installing it into the shared library then downloaded the Windows build (`limbo.exe`, PE32). An empty tool name clears the mapping.
+- **Fragility:** Steam's update of 13 Oct 2026 removed the sibling `GetAvailableCompatTools`. `watch` checks every call and fails with a clear message.
+
+This became `steamshare watch`, a user service. `force-proton` remains the offline fallback.
 
 ## Testing
 

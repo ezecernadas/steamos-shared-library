@@ -10,12 +10,10 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from steamshare.adapters.safe_writes import write_file_atomically
+from steamshare.adapters.xdg_directories import user_config_home
 from steamshare.core.proton_mapping import SteamshareState
 
-# XDG Base Directory spec: user config goes to $XDG_CONFIG_HOME, or to
-# ~/.config when it is unset.
-XDG_CONFIG_HOME_VARIABLE = "XDG_CONFIG_HOME"
-DEFAULT_CONFIG_HOME = Path(".config")
+# Relative to the user's config folder (see `xdg_directories`).
 STATE_RELATIVE_PATH = Path("steamshare") / "state.json"
 
 KEEP_NATIVE_KEY = "keep_native"
@@ -29,9 +27,7 @@ class StateFileError(Exception):
 
 
 def state_file_path(environment: Mapping[str, str], home: Path) -> Path:
-    config_home = environment.get(XDG_CONFIG_HOME_VARIABLE)
-    base = Path(config_home) if config_home else home / DEFAULT_CONFIG_HOME
-    return base / STATE_RELATIVE_PATH
+    return user_config_home(environment, home) / STATE_RELATIVE_PATH
 
 
 def read_state(path: Path) -> SteamshareState:
