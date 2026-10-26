@@ -158,7 +158,7 @@ def check_linux_only_directories(
         problem = _find_linux_only_directory_problem(find_mount_at(mounts, target), target)
         if problem is not None:
             problems.append(problem)
-            bind_commands.append(f"sudo mount --bind {LINUX_ONLY_DATA_DIRECTORY}/{name} {target}")
+            bind_commands.append(f"sudo mount --bind ~/{LINUX_ONLY_DATA_DIRECTORY / name} {target}")
 
     title = f"{' and '.join(LINUX_ONLY_DIRECTORIES)} are bind-mounted from ext4"
     if not problems:

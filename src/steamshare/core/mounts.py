@@ -21,9 +21,25 @@ READ_ONLY_OPTION = "ro"
 # Makes ntfs3 refuse names Windows forbids (EINVAL), instead of writing them.
 WINDOWS_NAMES_OPTION = "windows_names"
 
-# The options this project mounts the library partition with
-# (docs/PLAN.md, "NTFS mount unit").
-NTFS3_MOUNT_OPTIONS = "uid=1000,gid=1000,umask=022,windows_names"
+# ntfs3 has no Linux permissions on disk, so every file shows the owner and
+# mode given at mount time. 022 lets only the owner write, as on ext4.
+NTFS3_UMASK = "022"
+
+# The first desktop user on most distros and on SteamOS (the `deck` user).
+# Used in hints, where the real user is not known.
+DEFAULT_USER_ID = 1000
+
+
+def build_ntfs3_mount_options(user_id: int, group_id: int) -> str:
+    """Return the options this project mounts the library partition with.
+
+    The files belong to the desktop user, so Steam can write them without root
+    (docs/PLAN.md, "NTFS mount unit").
+    """
+    return f"uid={user_id},gid={group_id},umask={NTFS3_UMASK},{WINDOWS_NAMES_OPTION}"
+
+
+NTFS3_MOUNT_OPTIONS = build_ntfs3_mount_options(DEFAULT_USER_ID, DEFAULT_USER_ID)
 
 
 @dataclass(frozen=True)

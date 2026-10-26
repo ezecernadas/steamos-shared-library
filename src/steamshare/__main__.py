@@ -7,7 +7,7 @@ so adding a command means adding one module and one line below.
 import argparse
 import sys
 
-from steamshare.cli import doctor
+from steamshare.cli import doctor, install
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -17,6 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subcommands = parser.add_subparsers(title="commands", required=True)
     doctor.add_parser(subcommands)
+    install.add_parser(subcommands)
     return parser
 
 

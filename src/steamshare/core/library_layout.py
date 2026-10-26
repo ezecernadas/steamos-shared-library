@@ -25,7 +25,9 @@ LINUX_ONLY_DIRECTORIES = ("compatdata", "shadercache")
 
 # The ext4 folder that holds the real `compatdata` and `shadercache`, which
 # are bind-mounted over the library (docs/PLAN.md, "Bind-mount units").
-LINUX_ONLY_DATA_DIRECTORY = "~/.local/share/steam-shared"
+# Relative to the user's home: hints show it as `~/...`, while systemd units
+# need the absolute path, since they cannot expand `~`.
+LINUX_ONLY_DATA_DIRECTORY = PurePosixPath(".local/share/steam-shared")
 
 # Name prefixes of the Linux tools that Steam installs into the game's library,
 # under `steamapps/common` (for example "Proton - Experimental" and
