@@ -14,7 +14,7 @@ NTFS3_LINE = (
     "rw,uid=1000,gid=1000,dmask=0022,fmask=0022,windows_names,acl,iocharset=utf8,prealloc"
 )
 BIND_LINE = (
-    "520 512 259:2 /home/ezecer/.local/share/steam-shared/compatdata "
+    "520 512 259:2 /home/player/.local/share/steam-shared/compatdata "
     "/mnt/steamlib/SteamLibrary/steamapps/compatdata rw,relatime shared:1 "
     "- ext4 /dev/nvme0n1p2 rw,errors=remount-ro"
 )

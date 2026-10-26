@@ -35,10 +35,18 @@ def absolute_path(value: str) -> PurePosixPath:
     return path
 
 
-def folder_name(value: str) -> str:
-    if not value or "/" in value or value in (".", ".."):
+# Path parts that would leave the folder they are relative to, or that the
+# `/`-joined text could hide (an empty part comes from "a//b").
+UNSAFE_PATH_PARTS = frozenset({"", ".", ".."})
+
+
+def relative_folder(value: str) -> str:
+    # A folder inside another one, such as the library folder inside the
+    # partition: "SteamLibrary", or "Games/Steam" for a nested library.
+    if value.startswith("/") or UNSAFE_PATH_PARTS.intersection(value.split("/")):
         raise argparse.ArgumentTypeError(
-            f"{value!r} must be a single folder name, such as SteamLibrary"
+            f"{value!r} must be a folder inside the partition, such as SteamLibrary "
+            "or Games/SteamLibrary"
         )
     return value
 

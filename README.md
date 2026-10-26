@@ -17,6 +17,23 @@ NTFS is not what breaks Steam on Linux. Linux NTFS drivers handle symlinks, and 
 
 Working on a Zorin OS + Windows dual boot: `install` mounts the library at boot, `watch` forces Proton live so a click on Install fetches the Windows build, `doctor` checks the setup, and `windows/setup.ps1` prepares Windows. Not yet tested on SteamOS itself (Phase 4). See [docs/PLAN.md](docs/PLAN.md).
 
+## Linux setup
+
+From the repository folder, after `uv sync`:
+
+```bash
+sudo .venv/bin/python -m steamshare install
+.venv/bin/python -m steamshare install-watch
+```
+
+- **`install`** lists the NTFS partitions and what each one holds (Windows, recovery, a Steam library). To see that, it mounts each one read-only for a moment, which writes nothing. It asks which partition is the shared library, then writes systemd units that mount it at every boot with `ntfs3` and `windows_names`, and that bind-mount `compatdata` and `shadercache` from ext4.
+  - `--dry-run` shows the plan.
+  - `--partition-uuid`, `--library-folder`, `--mount-point` (default `/mnt/steamlib`) and `--yes` skip the questions, for scripts.
+- **`install-watch`** (no sudo) enables Steam's local debugger and a user service. With Steam open, the service forces Proton on games that ship a native Linux build, so installing one into the shared library fetches its Windows build.
+  - Set the shared library as the default in Steam (Settings → Storage → Make default) and a click on Install is all it takes.
+  - `force-proton --keep-native <appid>` opts a game out.
+- **`doctor --library /mnt/steamlib/SteamLibrary`** checks the whole setup.
+
 ## Windows setup
 
 `windows/setup.ps1` turns off hibernation and Fast Startup, which leave NTFS dirty so that Linux mounts it read-only, then checks the library: the folder, its NTFS volume, the dirty bit, and its registration in Windows Steam. It needs nothing beyond the Windows PowerShell that ships with Windows.

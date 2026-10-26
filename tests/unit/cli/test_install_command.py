@@ -1,8 +1,8 @@
 """Tests for the `install` command's wiring, with every system effect faked.
 
 The unit directory is a temporary folder, and root, the partition lookup,
-systemctl, and chown are replaced, so the tests run without root and change
-nothing on the machine.
+systemctl, chown, the partition listing and probing, and the console are
+replaced, so the tests run without root and change nothing on the machine.
 """
 
 import argparse
@@ -11,6 +11,8 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
+from steamshare.__main__ import build_parser
+from steamshare.adapters.console import Console
 from steamshare.adapters.invoking_user import InvokingUser
 from steamshare.cli.install import (
     EXIT_FAILURE,
@@ -18,15 +20,37 @@ from steamshare.cli.install import (
     System,
     install,
 )
-from steamshare.cli.shared import absolute_path, folder_name
+from steamshare.cli.install_choices import Discovery
+from steamshare.cli.shared import absolute_path, relative_folder
+from steamshare.core.ntfs_partitions import (
+    NtfsPartition,
+    PartitionContents,
+    PartitionFacts,
+    not_inspected_without_root,
+)
+from steamshare.core.systemd_units import DEFAULT_MOUNT_POINT
 
-USER = InvokingUser(user_id=1000, group_id=1000, home=PurePosixPath("/home/ezecer"))
+USER = InvokingUser(user_id=1000, group_id=1000, home=PurePosixPath("/home/player"))
 EXPECTED_UNITS = [
     "steamshare-ntfs3.service",
     "mnt-steamlib.mount",
     "mnt-steamlib-SteamLibrary-steamapps-compatdata.mount",
     "mnt-steamlib-SteamLibrary-steamapps-shadercache.mount",
 ]
+
+
+WINDOWS = NtfsPartition(
+    PurePosixPath("/dev/nvme0n1p3"), 192277381120, None, "3333CCCC4444DDDD", None
+)
+LIBRARY = NtfsPartition(
+    PurePosixPath("/dev/nvme0n1p4"), 103078166528, "SteamLib", "1111AAAA2222BBBB", None
+)
+WINDOWS_CONTENTS = PartitionContents(
+    has_windows_system=True, has_recovery_folder=True, library_folders=()
+)
+LIBRARY_CONTENTS = PartitionContents(
+    has_windows_system=False, has_recovery_folder=False, library_folders=("SteamLibrary",)
+)
 
 
 class FakeSystem:
@@ -43,6 +67,13 @@ class FakeSystem:
         self.enable_error: Exception | None = None
         self.is_root = is_root
         self.user = InvokingUser(user.user_id, user.group_id, PurePosixPath(self.home))
+        # Every effect in order, to check that the library folder is created
+        # only after the mounts are enabled.
+        self.events: list[str] = []
+        self.answers: list[str] = []
+        self.prompts: list[str] = []
+        self.interactive = False
+        self.contents = {WINDOWS: WINDOWS_CONTENTS, LIBRARY: LIBRARY_CONTENTS}
 
     def build(self) -> System:
         return System(
@@ -51,21 +82,49 @@ class FakeSystem:
             unit_directory=self.unit_directory,
             partition_exists=lambda device: self.partition_present,
             enable_units=self._enable,
-            change_owner=lambda path, user_id, group_id: self.owners.append(path),
+            change_owner=self._change_owner,
+            discovery=Discovery(
+                list_partitions=lambda: list(self.contents), probe_partition=self._probe
+            ),
+            console=Console(ask=self._ask, show=print, is_interactive=self.interactive),
         )
 
     def _enable(self, unit_names: list[str]) -> None:
         if self.enable_error is not None:
             raise self.enable_error
         self.enabled.append(unit_names)
+        self.events.append("enable")
+
+    def _change_owner(self, path: Path, user_id: int, group_id: int) -> None:
+        self.owners.append(path)
+        self.events.append(f"own {path.name}")
+
+    def _probe(self, partition: NtfsPartition) -> PartitionFacts:
+        if not self.is_root:
+            return not_inspected_without_root(partition)
+        return PartitionFacts(partition, self.contents[partition])
+
+    def _ask(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        if not self.answers:
+            raise EOFError
+        return self.answers.pop(0)
 
 
-def make_arguments(dry_run: bool = False) -> argparse.Namespace:
+def make_arguments(
+    dry_run: bool = False,
+    *,
+    partition_uuid: str | None = "1111AAAA2222BBBB",
+    library_folder: str | None = "SteamLibrary",
+    mount_point: PurePosixPath = DEFAULT_MOUNT_POINT,
+    yes: bool = False,
+) -> argparse.Namespace:
     return argparse.Namespace(
-        partition_uuid="D8E665D5E665B502",
-        mount_point=PurePosixPath("/mnt/steamlib"),
-        library_folder="SteamLibrary",
+        partition_uuid=partition_uuid,
+        mount_point=mount_point,
+        library_folder=library_folder,
         dry_run=dry_run,
+        yes=yes,
     )
 
 
@@ -127,7 +186,7 @@ def test_refuses_to_run_without_root_and_explains_how(
     assert exit_code == EXIT_FAILURE
     assert list(system.unit_directory.iterdir()) == []
     error = capsys.readouterr().err
-    assert "sudo .venv/bin/python -m steamshare install --partition-uuid D8E665D5E665B502" in error
+    assert "sudo .venv/bin/python -m steamshare install --partition-uuid 1111AAAA2222BBBB" in error
     assert "--dry-run" in error
 
 
@@ -154,7 +213,7 @@ def test_refuses_an_unknown_partition_uuid(
     assert exit_code == EXIT_FAILURE
     assert list(system.unit_directory.iterdir()) == []
     error = capsys.readouterr().err
-    assert "/dev/disk/by-uuid/D8E665D5E665B502" in error
+    assert "/dev/disk/by-uuid/1111AAAA2222BBBB" in error
     assert "lsblk -f" in error
 
 
@@ -171,7 +230,129 @@ def test_reports_a_systemctl_failure_with_the_next_step(
     assert "systemctl status mnt-steamlib.mount" in error
 
 
+# --- Choosing interactively --------------------------------------------------
+
+
+def test_without_flags_asks_for_the_partition_and_confirms(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = FakeSystem(tmp_path)
+    system.interactive = True
+    system.answers = ["", ""]
+
+    exit_code = install(make_arguments(partition_uuid=None, library_folder=None), system.build())
+
+    assert exit_code == EXIT_OK
+    assert system.prompts == ["Which partition holds the shared library? [2]: ", "Proceed? [Y/n]: "]
+    assert system.enabled == [EXPECTED_UNITS[1:]]
+    output = capsys.readouterr().out
+    assert "  Partition:      /dev/nvme0n1p4 (SteamLib, 96 GB)" in output
+    assert "  UUID:           1111AAAA2222BBBB" in output
+    assert "  Library folder: /mnt/steamlib/SteamLibrary" in output
+
+
+def test_declining_the_confirmation_writes_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = FakeSystem(tmp_path)
+    system.interactive = True
+    system.answers = ["", "n"]
+
+    exit_code = install(make_arguments(partition_uuid=None, library_folder=None), system.build())
+
+    assert exit_code == EXIT_FAILURE
+    assert list(system.unit_directory.iterdir()) == []
+    assert system.enabled == []
+    assert "nothing was changed" in capsys.readouterr().err
+
+
+def test_yes_installs_the_suggested_partition_without_any_prompt(tmp_path: Path) -> None:
+    system = FakeSystem(tmp_path)
+
+    exit_code = install(
+        make_arguments(partition_uuid=None, library_folder=None, yes=True), system.build()
+    )
+
+    assert exit_code == EXIT_OK
+    assert system.prompts == []
+    assert system.enabled == [EXPECTED_UNITS[1:]]
+
+
+def test_dry_run_without_root_or_terminal_lists_partitions_and_names_the_flags(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = FakeSystem(tmp_path, is_root=False)
+
+    exit_code = install(
+        make_arguments(dry_run=True, partition_uuid=None, library_folder=None), system.build()
+    )
+
+    assert exit_code == EXIT_FAILURE
+    captured = capsys.readouterr()
+    assert "contents unknown (run with sudo to inspect)" in captured.out
+    assert "--partition-uuid" in captured.err
+    assert "/dev/nvme0n1p4  1111AAAA2222BBBB" in captured.err
+
+
+def test_a_named_folder_that_is_not_a_library_is_created_after_mounting(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = FakeSystem(tmp_path)
+    mount_point = tmp_path / "mnt"
+    mount_point.mkdir()
+
+    exit_code = install(
+        make_arguments(
+            partition_uuid=None,
+            library_folder="Games",
+            mount_point=PurePosixPath(mount_point),
+            yes=True,
+        ),
+        system.build(),
+    )
+
+    assert exit_code == EXIT_OK
+    assert (mount_point / "Games").is_dir()
+    assert system.events[-2:] == ["enable", "own Games"]
+    assert f"created: {mount_point / 'Games'}" in capsys.readouterr().out
+
+
+def test_dry_run_says_the_named_folder_would_be_created(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = FakeSystem(tmp_path)
+
+    install(
+        make_arguments(dry_run=True, partition_uuid=None, library_folder="Games", yes=True),
+        system.build(),
+    )
+
+    output = capsys.readouterr().out
+    assert "would create after mounting, if missing: /mnt/steamlib/Games" in output
+
+
+def test_without_root_the_hint_repeats_only_the_flags_given(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = FakeSystem(tmp_path, is_root=False)
+
+    install(make_arguments(partition_uuid=None, library_folder=None), system.build())
+
+    error = capsys.readouterr().err
+    assert "sudo .venv/bin/python -m steamshare install --mount-point /mnt/steamlib" in error
+    assert "--partition-uuid" not in error
+
+
 # --- Argument validation -----------------------------------------------------
+
+
+def test_every_install_flag_is_optional_and_the_mount_point_has_a_default() -> None:
+    arguments = build_parser().parse_args(["install"])
+
+    assert arguments.mount_point == PurePosixPath("/mnt/steamlib")
+    assert arguments.partition_uuid is None
+    assert arguments.library_folder is None
+    assert arguments.yes is False
 
 
 @pytest.mark.parametrize("value", ["mnt/steamlib", "/", ""])
@@ -184,7 +365,12 @@ def test_mount_point_accepts_an_absolute_folder() -> None:
     assert absolute_path("/mnt/steamlib") == PurePosixPath("/mnt/steamlib")
 
 
-@pytest.mark.parametrize("value", ["", "a/b", ".", ".."])
-def test_library_folder_must_be_a_single_folder_name(value: str) -> None:
+@pytest.mark.parametrize("value", ["", ".", "..", "/SteamLibrary", "a/../b", "a//b"])
+def test_library_folder_must_be_a_plain_relative_folder(value: str) -> None:
     with pytest.raises(argparse.ArgumentTypeError):
-        folder_name(value)
+        relative_folder(value)
+
+
+@pytest.mark.parametrize("value", ["SteamLibrary", "Games/Steam"])
+def test_library_folder_may_be_nested(value: str) -> None:
+    assert relative_folder(value) == value

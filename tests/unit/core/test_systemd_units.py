@@ -30,12 +30,12 @@ from steamshare.core.systemd_units import (
 )
 
 CONFIG = InstallConfig(
-    partition_uuid="D8E665D5E665B502",
+    partition_uuid="1111AAAA2222BBBB",
     mount_point=PurePosixPath("/mnt/steamlib"),
     library_folder="SteamLibrary",
     user_id=1000,
     group_id=1000,
-    home=PurePosixPath("/home/ezecer"),
+    home=PurePosixPath("/home/player"),
 )
 
 NTFS_MOUNT_UNIT = "mnt-steamlib.mount"
@@ -130,7 +130,7 @@ def test_ntfs_mount_uses_ntfs3_by_uuid_with_windows_names_and_nofail() -> None:
     lines = lines_of(unit)
 
     assert unit.name == NTFS_MOUNT_UNIT
-    assert "What=/dev/disk/by-uuid/D8E665D5E665B502" in lines
+    assert "What=/dev/disk/by-uuid/1111AAAA2222BBBB" in lines
     assert "Where=/mnt/steamlib" in lines
     assert "Type=ntfs3" in lines
     assert "Options=uid=1000,gid=1000,umask=022,windows_names,nofail" in lines
@@ -167,7 +167,7 @@ def test_bind_mount_maps_the_ext4_folder_over_the_library_folder() -> None:
     lines = lines_of(unit)
 
     assert unit.name == "mnt-steamlib-SteamLibrary-steamapps-compatdata.mount"
-    assert "What=/home/ezecer/.local/share/steam-shared/compatdata" in lines
+    assert "What=/home/player/.local/share/steam-shared/compatdata" in lines
     assert "Where=/mnt/steamlib/SteamLibrary/steamapps/compatdata" in lines
     assert "Type=none" in lines
     assert "Options=bind,nofail" in lines
@@ -183,8 +183,8 @@ def test_bind_mount_lives_and_dies_with_the_ntfs_mount() -> None:
 
 def test_linux_only_data_paths_are_absolute_under_home() -> None:
     assert linux_only_data_paths(CONFIG) == (
-        PurePosixPath("/home/ezecer/.local/share/steam-shared/compatdata"),
-        PurePosixPath("/home/ezecer/.local/share/steam-shared/shadercache"),
+        PurePosixPath("/home/player/.local/share/steam-shared/compatdata"),
+        PurePosixPath("/home/player/.local/share/steam-shared/shadercache"),
     )
 
 
@@ -198,7 +198,7 @@ def test_percent_signs_in_paths_are_escaped_so_systemd_does_not_expand_them() ->
         library_folder="SteamLibrary",
         user_id=1000,
         group_id=1000,
-        home=PurePosixPath("/home/ezecer"),
+        home=PurePosixPath("/home/player"),
     )
 
     assert "Where=/mnt/100%%" in lines_of(render_ntfs_mount(config))
@@ -207,10 +207,10 @@ def test_percent_signs_in_paths_are_escaped_so_systemd_does_not_expand_them() ->
 # --- The watch service ---------------------------------------------------------
 
 WATCH_CONFIG = WatchServiceConfig(
-    python=PurePosixPath("/home/ezecer/steamshare/.venv/bin/python"),
+    python=PurePosixPath("/home/player/steamshare/.venv/bin/python"),
     library=PurePosixPath("/mnt/steamlib/SteamLibrary"),
     tool="proton_experimental",
-    steam_root=PurePosixPath("/home/ezecer/.steam/steam"),
+    steam_root=PurePosixPath("/home/player/.steam/steam"),
 )
 
 
@@ -220,9 +220,9 @@ def test_the_watch_service_runs_watch_with_this_python_for_the_library() -> None
     assert unit.name == WATCH_SERVICE
     assert unit.enable_at_boot
     assert (
-        "ExecStart=/home/ezecer/steamshare/.venv/bin/python -m steamshare watch "
+        "ExecStart=/home/player/steamshare/.venv/bin/python -m steamshare watch "
         "--library /mnt/steamlib/SteamLibrary --tool proton_experimental "
-        "--steam-root /home/ezecer/.steam/steam"
+        "--steam-root /home/player/.steam/steam"
     ) in lines_of(unit)
 
 

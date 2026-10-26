@@ -49,6 +49,11 @@ NTFS3_KERNEL_MODULE = "ntfs3"
 # /usr/sbin into /usr, so this path reaches `modprobe` on both.
 MODPROBE_PATH = PurePosixPath("/usr/sbin/modprobe")
 
+# Where `install` mounts the library partition unless told otherwise. Under
+# /mnt, the conventional place for mounts an administrator sets up, and away
+# from /media and /run/media, where desktops automount removable disks.
+DEFAULT_MOUNT_POINT = PurePosixPath("/mnt/steamlib")
+
 # Stable across reboots and disk reordering, unlike /dev/sdX or /dev/nvmeXnYpZ.
 DEVICE_BY_UUID_DIRECTORY = PurePosixPath("/dev/disk/by-uuid")
 

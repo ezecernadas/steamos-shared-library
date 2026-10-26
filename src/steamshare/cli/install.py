@@ -1,12 +1,14 @@
 """The `install` command: mount the shared library at every boot.
 
-It writes the units from `core.systemd_units` into /etc/systemd/system,
-creates the ext4 folders they bind-mount, and enables the mounts. Every
-effect on the machine goes through `System`, so the wiring below is tested
-without root and without touching the machine.
+It settles the partition and library folder (asking, unless flags give them;
+see `install_choices`), writes the units from `core.systemd_units` into
+/etc/systemd/system, creates the ext4 folders they bind-mount, and enables
+the mounts. Every effect on the machine goes through `System`, so the wiring
+below is tested without root and without touching the machine.
 """
 
 import argparse
+import functools
 import os
 import shlex
 import subprocess
@@ -15,7 +17,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from steamshare.adapters.block_devices import read_ntfs_partitions
+from steamshare.adapters.console import Console, terminal_console
 from steamshare.adapters.invoking_user import InvokingUser, resolve_invoking_user
+from steamshare.adapters.partition_inspector import PartitionCleanupError, probe_partition
 from steamshare.adapters.systemctl import enable_units_now, plan_enable_commands
 from steamshare.adapters.unit_installer import (
     SYSTEM_UNIT_DIRECTORY,
@@ -24,15 +29,25 @@ from steamshare.adapters.unit_installer import (
     create_owned_directories,
     install_unit_files,
 )
+from steamshare.cli.install_choices import (
+    Discovery,
+    InstallChoices,
+    InstallError,
+    confirm_install,
+    format_summary,
+    missing_partition_error,
+    resolve_choices,
+)
 from steamshare.cli.shared import (
     DONE_ACTION_LABELS,
     PLANNED_ACTION_LABELS,
     ROOT_USER_ID,
     absolute_path,
-    folder_name,
     format_outcome,
+    relative_folder,
 )
 from steamshare.core.systemd_units import (
+    DEFAULT_MOUNT_POINT,
     InstallConfig,
     UnitFile,
     build_units,
@@ -59,32 +74,37 @@ class System:
     partition_exists: Callable[[PurePosixPath], bool]
     enable_units: Callable[[list[str]], None]
     change_owner: ChangeOwner
-
-
-class InstallError(Exception):
-    """An expected failure, with a message that says what to do next."""
+    discovery: Discovery
+    console: Console
 
 
 def add_parser(subcommands: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
     parser = subcommands.add_parser(
-        "install", help="install the systemd units that mount the shared library at boot"
+        "install",
+        help="install the systemd units that mount the shared library at boot",
+        description="Without flags, install lists the NTFS partitions and asks which one "
+        "holds the library. Each flag given skips its question.",
     )
     parser.add_argument(
         "--partition-uuid",
-        required=True,
-        help="UUID of the NTFS partition, as `lsblk -f` shows it",
+        help="UUID of the NTFS partition, as `lsblk -f` shows it (asked if left out)",
     )
     parser.add_argument(
         "--mount-point",
         type=absolute_path,
-        required=True,
-        help="where to mount the partition, such as /mnt/steamlib",
+        default=DEFAULT_MOUNT_POINT,
+        help=f"where to mount the partition (default: {DEFAULT_MOUNT_POINT})",
     )
     parser.add_argument(
         "--library-folder",
-        type=folder_name,
-        required=True,
-        help="the folder on the partition that contains steamapps, such as SteamLibrary",
+        type=relative_folder,
+        help="the folder on the partition that contains steamapps, such as SteamLibrary; "
+        "created after mounting if it is missing (found on the partition if left out)",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="ask nothing: take the suggested choices and do not ask for confirmation",
     )
     parser.add_argument(
         "--dry-run",
@@ -95,32 +115,45 @@ def add_parser(subcommands: "argparse._SubParsersAction[argparse.ArgumentParser]
 
 
 def run(arguments: argparse.Namespace) -> int:
+    is_root = os.geteuid() == ROOT_USER_ID
     system = System(
-        is_root=os.geteuid() == ROOT_USER_ID,
+        is_root=is_root,
         invoking_user=resolve_invoking_user(),
         unit_directory=SYSTEM_UNIT_DIRECTORY,
         partition_exists=lambda device: Path(device).exists(),
         enable_units=enable_units_now,
         change_owner=os.chown,
+        discovery=Discovery(
+            list_partitions=read_ntfs_partitions,
+            # Mounting a partition to look inside needs root.
+            probe_partition=functools.partial(probe_partition, can_mount=is_root),
+        ),
+        console=terminal_console(),
     )
     return install(arguments, system)
 
 
 def install(arguments: argparse.Namespace, system: System) -> int:
     try:
-        config = build_config(arguments, system)
+        config, choices = build_config(arguments, system)
         units = build_units(config)
+        summary = format_summary(choices, config.mount_point, [unit.name for unit in units])
+        confirm_install(
+            summary, system.console, assume_yes=arguments.yes, dry_run=arguments.dry_run
+        )
         if arguments.dry_run:
-            preview_install(config, units, system)
+            preview_install(config, choices, units, system)
         else:
-            apply_install(config, units, system)
-    except InstallError as error:
+            apply_install(config, choices, units, system)
+    except (InstallError, PartitionCleanupError) as error:
         print(f"Error: {error}", file=sys.stderr)
         return EXIT_FAILURE
     return EXIT_OK
 
 
-def build_config(arguments: argparse.Namespace, system: System) -> InstallConfig:
+def build_config(
+    arguments: argparse.Namespace, system: System
+) -> tuple[InstallConfig, InstallChoices]:
     """Check that install can run, then gather its configuration."""
     if not arguments.dry_run and not system.is_root:
         raise InstallError(_needs_root_message(arguments))
@@ -130,34 +163,32 @@ def build_config(arguments: argparse.Namespace, system: System) -> InstallConfig
             "The files would belong to root, so Steam could not write to them. "
             "Run install with sudo from the desktop user account that runs Steam."
         )
-    device = partition_device(arguments.partition_uuid)
+    choices = resolve_choices(arguments, system.discovery, system.console)
     # Checked up front because the mount has `nofail`: with a wrong UUID it
     # would fail silently at every boot instead of here.
-    if not system.partition_exists(device):
-        raise InstallError(
-            f"No partition at {device}. Find the NTFS partition's UUID with `lsblk -f` "
-            "and pass it with --partition-uuid."
-        )
-    return InstallConfig(
-        partition_uuid=arguments.partition_uuid,
+    if not system.partition_exists(partition_device(choices.partition_uuid)):
+        raise missing_partition_error(choices.partition_uuid)
+    config = InstallConfig(
+        partition_uuid=choices.partition_uuid,
         mount_point=arguments.mount_point,
-        library_folder=arguments.library_folder,
+        library_folder=choices.library_folder,
         user_id=user.user_id,
         group_id=user.group_id,
         home=user.home,
     )
+    return config, choices
 
 
 def _needs_root_message(arguments: argparse.Namespace) -> str:
+    # Repeats only the flags the user gave, so the same choices stay open.
+    given_flags = [
+        ("--partition-uuid", arguments.partition_uuid),
+        ("--mount-point", arguments.mount_point),
+        ("--library-folder", arguments.library_folder),
+    ]
     install_arguments = shlex.join(
-        [
-            "--partition-uuid",
-            arguments.partition_uuid,
-            "--mount-point",
-            str(arguments.mount_point),
-            "--library-folder",
-            arguments.library_folder,
-        ]
+        [part for flag, value in given_flags if value is not None for part in (flag, str(value))]
+        + (["--yes"] if arguments.yes else [])
     )
     return (
         f"install writes to {SYSTEM_UNIT_DIRECTORY}, so it needs root. "
@@ -167,7 +198,9 @@ def _needs_root_message(arguments: argparse.Namespace) -> str:
     )
 
 
-def preview_install(config: InstallConfig, units: list[UnitFile], system: System) -> None:
+def preview_install(
+    config: InstallConfig, choices: InstallChoices, units: list[UnitFile], system: System
+) -> None:
     print("Dry run: nothing is written and systemctl is not run.\n")
     for unit in units:
         print(f"--- {system.unit_directory / unit.name}")
@@ -179,9 +212,15 @@ def preview_install(config: InstallConfig, units: list[UnitFile], system: System
         print(format_outcome(outcome, PLANNED_ACTION_LABELS))
     for command in plan_enable_commands(_names_to_enable(units)):
         print(f"  would run: {shlex.join(command)}")
+    if choices.create_library_folder:
+        # Not checked on disk: before the first install the partition is not
+        # mounted there yet, so the folder's presence cannot be seen.
+        print(f"  would create after mounting, if missing: {_library_path(config)}")
 
 
-def apply_install(config: InstallConfig, units: list[UnitFile], system: System) -> None:
+def apply_install(
+    config: InstallConfig, choices: InstallChoices, units: list[UnitFile], system: System
+) -> None:
     try:
         unit_outcomes = install_unit_files(units, system.unit_directory)
         directory_outcomes = _create_data_directories(config, system, dry_run=False)
@@ -202,13 +241,40 @@ def apply_install(config: InstallConfig, units: list[UnitFile], system: System) 
             f"See why with `systemctl status {' '.join(names_to_enable)}` "
             "and `journalctl -xe`, then run install again."
         ) from error
-
-    library = config.mount_point / config.library_folder
     print(f"Enabled and started: {' '.join(names_to_enable)}")
+
+    if choices.create_library_folder:
+        _create_library_folder(config, system)
     print(
         "Next step: check the setup as your desktop user with "
-        f"`uv run python -m steamshare doctor --library {shlex.quote(str(library))}`."
+        f"`uv run python -m steamshare doctor --library {shlex.quote(str(_library_path(config)))}`."
     )
+
+
+def _create_library_folder(config: InstallConfig, system: System) -> None:
+    # Only now: before the mount is started, the path is an empty folder on
+    # the Linux root filesystem, not on the partition. systemd may already
+    # have created it, as the parent of the bind mounts; then it is reported
+    # unchanged. On ntfs3 the owner shown comes from the mount's uid= option,
+    # so the change of owner matters only on other filesystems.
+    try:
+        outcomes = create_owned_directories(
+            [Path(_library_path(config))],
+            config.user_id,
+            config.group_id,
+            change_owner=system.change_owner,
+        )
+    except OSError as error:
+        raise InstallError(
+            f"The mounts are enabled, but creating {error.filename} failed: {error.strerror}. "
+            "Create the folder from Windows or as your user, then run install again."
+        ) from error
+    for outcome in outcomes:
+        print(format_outcome(outcome, DONE_ACTION_LABELS))
+
+
+def _library_path(config: InstallConfig) -> PurePosixPath:
+    return config.mount_point / config.library_folder
 
 
 def _create_data_directories(

@@ -1,0 +1,104 @@
+{
+   "blockdevices": [
+      {
+         "path": "/dev/loop0",
+         "fstype": "squashfs",
+         "size": 58183680,
+         "label": null,
+         "uuid": null,
+         "mountpoints": [
+             "/snap/core18/2999"
+         ]
+      },{
+         "path": "/dev/loop1",
+         "fstype": "squashfs",
+         "size": 58200064,
+         "label": null,
+         "uuid": null,
+         "mountpoints": [
+             "/snap/core18/3084"
+         ]
+      },{
+         "path": "/dev/loop2",
+         "fstype": "squashfs",
+         "size": 52711424,
+         "label": null,
+         "uuid": null,
+         "mountpoints": [
+             "/snap/snapd/27738"
+         ]
+      },{
+         "path": "/dev/loop3",
+         "fstype": "squashfs",
+         "size": 46882816,
+         "label": null,
+         "uuid": null,
+         "mountpoints": [
+             "/snap/snapd/28254"
+         ]
+      },{
+         "path": "/dev/nvme0n1",
+         "fstype": null,
+         "size": 512110190592,
+         "label": null,
+         "uuid": null,
+         "mountpoints": [
+             null
+         ]
+      },{
+         "path": "/dev/nvme0n1p1",
+         "fstype": "vfat",
+         "size": 209715200,
+         "label": null,
+         "uuid": "ABCD-1234",
+         "mountpoints": [
+             "/boot/efi"
+         ]
+      },{
+         "path": "/dev/nvme0n1p2",
+         "fstype": null,
+         "size": 16777216,
+         "label": null,
+         "uuid": null,
+         "mountpoints": [
+             null
+         ]
+      },{
+         "path": "/dev/nvme0n1p3",
+         "fstype": "ntfs",
+         "size": 192277381120,
+         "label": null,
+         "uuid": "3333CCCC4444DDDD",
+         "mountpoints": [
+             null
+         ]
+      },{
+         "path": "/dev/nvme0n1p4",
+         "fstype": "ntfs",
+         "size": 103078166528,
+         "label": "SteamLib",
+         "uuid": "1111AAAA2222BBBB",
+         "mountpoints": [
+             "/mnt/steamlib"
+         ]
+      },{
+         "path": "/dev/nvme0n1p5",
+         "fstype": "ntfs",
+         "size": 975175680,
+         "label": null,
+         "uuid": "5555EEEE6666FFFF",
+         "mountpoints": [
+             null
+         ]
+      },{
+         "path": "/dev/nvme0n1p6",
+         "fstype": "ext4",
+         "size": 214748364800,
+         "label": null,
+         "uuid": "00000000-1111-2222-3333-444444444444",
+         "mountpoints": [
+             "/mnt/steamlib/SteamLibrary/steamapps/shadercache", "/mnt/steamlib/SteamLibrary/steamapps/compatdata", "/"
+         ]
+      }
+   ]
+}
