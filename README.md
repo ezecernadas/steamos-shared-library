@@ -15,7 +15,24 @@ NTFS is not what breaks Steam on Linux. Linux NTFS drivers handle symlinks, and 
 
 ## Status
 
-The manual proof of concept passed: one install of a game ran on both Windows and Linux (Proton) with no re-download and a clean `chkdsk`. Tooling is not written yet. See [docs/PLAN.md](docs/PLAN.md).
+Working on a Zorin OS + Windows dual boot: `install` mounts the library at boot, `watch` forces Proton live so a click on Install fetches the Windows build, `doctor` checks the setup, and `windows/setup.ps1` prepares Windows. Not yet tested on SteamOS itself (Phase 4). See [docs/PLAN.md](docs/PLAN.md).
+
+## Windows setup
+
+`windows/setup.ps1` turns off hibernation and Fast Startup, which leave NTFS dirty so that Linux mounts it read-only, then checks the library: the folder, its NTFS volume, the dirty bit, and its registration in Windows Steam. It needs nothing beyond the Windows PowerShell that ships with Windows.
+
+From an elevated PowerShell (Run as administrator), in the repository folder:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File windows\setup.ps1
+```
+
+- Without `-Library`, the script looks for the shared library among the ones Windows Steam knows: an NTFS library outside the system drive. It asks you to confirm the one it found, or to pick one when there are several.
+- `-Library <path>` names the library directly, for example `-Library E:\Games\SteamLibrary`. It is needed only when several libraries qualify and nobody can answer the question (in a script).
+- `-Yes` never asks a question, for scripts: a single detected library is used as is, and several make the script fail and list them, so you pass one with `-Library`.
+- `-WhatIf` shows what would change and changes nothing; it does not need an elevated prompt.
+
+Running it again is safe: it only changes what is not already right. The exit code is 1 when a step failed.
 
 ## Contributing
 

@@ -74,6 +74,14 @@ These tools write to Steam's config, to `/etc`, and to a disk Windows also uses.
 - Pass `shellcheck` with no warnings.
 - Quote every expansion.
 
+**PowerShell (Windows side):**
+- Compatible with Windows PowerShell 5.1, the version every Windows ships, so users install nothing. No ternary, no `??`, no `&&` or `||` between commands, no `ForEach-Object -Parallel`, and no cmdlets that exist only in PowerShell 7. Keep files ASCII: 5.1 reads UTF-8 without a BOM as the ANSI code page.
+- Start every script and module with `Set-StrictMode -Version Latest` and `$ErrorActionPreference = 'Stop'`.
+- Use approved verbs only (`Get-Verb` lists them).
+- Pass PSScriptAnalyzer with its default rules and no findings. Suppress a rule only on the one function that needs it, with a justification.
+- Test with Pester 5. CI runs the tests under both 5.1 and PowerShell 7.
+- Wrap every external effect (registry, native commands, `Get-Volume` and other CIM queries, file reads, prompts) in a small function of its own, and keep the decisions out of it. Tests mock those wrappers, never the real cmdlets, so they also run on Linux.
+
 **Language:** code, comments, docs, and commit messages are in English.
 
 ## 7. Errors say what to do next

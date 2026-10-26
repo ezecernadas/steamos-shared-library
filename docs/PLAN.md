@@ -22,7 +22,7 @@ A dual-boot PC running Windows and SteamOS 3.8 (reference hardware: RX 6700 XT, 
 | Linux tools library | Proton and Steam Linux Runtime are installed into the same library as the game unless told otherwise. A dedicated ext4 library keeps those tools (about 1.4 GB and 3,000+ symlinks) off NTFS. |
 | `doctor` | Health check: the mount is `ntfs3` (not `fuseblk`), the volume is neither dirty nor read-only, the bind mounts are active, and there are no Windows-invalid names on NTFS. It also lists symlinks on NTFS outside the known Linux-tool folders (Linux Steam creates `steamapps/common/Steam.dll` as a symlink to `~/.steam/.../legacycompat`). |
 | `install.sh` / `uninstall.sh` | Idempotent setup and teardown; they detect the partition by UUID. |
-| `windows/setup.ps1` | Disables Fast Startup and hibernation, and checks the library path. |
+| `windows/setup.ps1` | Disables Fast Startup and hibernation, and checks the library: folder, NTFS, dirty bit, and registration in Windows Steam. Without `-Library`, it detects the library among the NTFS ones Windows Steam knows outside the system drive. |
 
 ## Phases
 
@@ -33,7 +33,7 @@ Each phase ends with passing tests.
 2. Bind mounts for `compatdata` and `shadercache`. **Done** as part of `install`.
 3. `force-proton`, with pytest over `config.vdf` and `appmanifest_*.acf` fixtures. **Done**, plus `watch` / `install-watch` for live mapping (see [Live mapping spike](#live-mapping-spike-2026-10-26)).
 4. Installer and uninstaller. Check that the setup survives a SteamOS update.
-5. Windows setup script.
+5. Windows setup script. **Done:** `windows/setup.ps1`, with Pester tests and PSScriptAnalyzer in CI under Windows PowerShell 5.1 and PowerShell 7.
 6. **Done.** CI on GitHub Actions (`.github/workflows/ci.yml`). The runner's Azure kernel ships `ntfs3` only in `linux-modules-extra`, which the workflow installs when needed:
    - lint with `shellcheck` and `ruff`;
    - `pytest`;
