@@ -17,6 +17,9 @@ STEAMAPPS_DIRECTORY = "steamapps"
 # Folder inside `steamapps` that holds one folder per installed app.
 COMMON_DIRECTORY = "common"
 
+# Steam describes each installed app in `steamapps/appmanifest_<appid>.acf`.
+APP_MANIFEST_PATTERN = "appmanifest_*.acf"
+
 # Folders inside `steamapps` that must never live on NTFS. Proton prefixes in
 # `compatdata` contain names such as `dosdevices/c:`, which Windows treats as
 # corruption. Shader caches are compiled per OS and driver, so Windows has no

@@ -12,13 +12,13 @@ CONTRIBUTING.md rule 5:
 """
 
 import os
-import shutil
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 
+from steamshare.adapters.safe_writes import back_up_file, write_file_atomically
 from steamshare.core.systemd_units import UnitFile
 
 # Where administrators put their own units. It survives SteamOS A/B updates,
@@ -27,8 +27,6 @@ SYSTEM_UNIT_DIRECTORY = Path("/etc/systemd/system")
 
 # Readable by everyone, as systemd and `systemctl cat` expect; writable by root.
 UNIT_FILE_MODE = 0o644
-
-BACKUP_TIMESTAMP_FORMAT = "%Y%m%d-%H%M%S"
 
 # Changes a path's owner; `os.chown` in production, a recorder in tests.
 ChangeOwner = Callable[[Path, int, int], None]
@@ -65,7 +63,7 @@ def install_unit_files(
     dry_run: bool = False,
 ) -> list[UnitFileOutcome]:
     """Write each unit into `directory` unless it is already up to date."""
-    timestamp = (now or datetime.now()).strftime(BACKUP_TIMESTAMP_FORMAT)
+    now = now or datetime.now()
     outcomes = []
     for unit in units:
         path = directory / unit.name
@@ -73,8 +71,9 @@ def install_unit_files(
         backup = None
         if not dry_run and action is not FileAction.UNCHANGED:
             if action is FileAction.UPDATED:
-                backup = _back_up(path, timestamp)
-            _write_unit_file(path, unit.content)
+                backup = back_up_file(path, now)
+            # Atomic, so systemd never reads a half-written unit.
+            write_file_atomically(path, unit.content, UNIT_FILE_MODE)
         outcomes.append(UnitFileOutcome(path=path, action=action, backup=backup))
     return outcomes
 
@@ -85,21 +84,6 @@ def _decide_unit_file_action(path: Path, content: str) -> FileAction:
     if path.read_text(encoding="utf-8") == content:
         return FileAction.UNCHANGED
     return FileAction.UPDATED
-
-
-def _back_up(path: Path, timestamp: str) -> Path:
-    backup = path.with_name(f"{path.name}.bak-{timestamp}")
-    shutil.copy2(path, backup)
-    return backup
-
-
-def _write_unit_file(path: Path, content: str) -> None:
-    # Write next to the target and rename over it, so systemd never reads a
-    # half-written unit if the write is interrupted.
-    temporary = path.with_name(f".{path.name}.steamshare-tmp")
-    temporary.write_text(content, encoding="utf-8")
-    temporary.chmod(UNIT_FILE_MODE)
-    os.replace(temporary, path)
 
 
 # --- Data folders ------------------------------------------------------------
