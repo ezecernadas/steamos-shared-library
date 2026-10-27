@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" width="128" alt="steamshare logo: a game controller split between a window and a terminal prompt">
+</p>
+
 # steamshare
 
 [![CI](https://github.com/ezecernadas/steamshare/actions/workflows/ci.yml/badge.svg)](https://github.com/ezecernadas/steamshare/actions/workflows/ci.yml)

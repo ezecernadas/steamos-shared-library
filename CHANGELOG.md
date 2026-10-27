@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - An "AI assistance" section in the README that says how the project was built.
 - A README FAQ entry on NTFS read performance, with `ntfs3` vs ext4 measurements.
+- A project logo (`assets/logo.svg`) and a social preview image for link previews.
 
 ## [0.1.0] - 2026-10-26
 
