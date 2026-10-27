@@ -166,7 +166,7 @@ Useful `install` options:
 
 - `--dry-run` shows the plan and changes nothing. It needs no sudo. Add `--show-units` to print the generated systemd files.
 - `--no-watch` installs only the mounts.
-- `--yes`, `--partition-uuid`, `--library-folder` and `--mount-point` (default `/mnt/steamlib`) answer the questions in advance, for scripts.
+- `--yes`, `--partition-uuid`, `--library-folder` and `--mount-point` answer the questions in advance, for scripts.
 - `--steam-root` points at a Steam installed elsewhere, such as the Flatpak.
 
 The Windows script takes `-Library <path>`, `-Yes`, and `-WhatIf` (a dry run).
