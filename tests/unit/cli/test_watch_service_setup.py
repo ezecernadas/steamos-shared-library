@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from steamshare.adapters.invoking_user import InvokingUser
+from steamshare.adapters.launcher_location import LAUNCHER_PATH
 from steamshare.cli.install_choices import InstallError
 from steamshare.cli.run_report import UNICODE_SYMBOLS, ClosingNotes, RunReport
 from steamshare.cli.watch_service_setup import (
@@ -142,7 +143,7 @@ def test_without_a_steam_root_the_watch_part_is_skipped_with_the_next_step(setup
     assert isinstance(plan, WatchServiceSkipped)
     assert str(setup.steam_root) in plan.reason
     assert plan.next_step is not None
-    assert "sudo ./steamshare install" in plan.next_step
+    assert f"sudo {LAUNCHER_PATH} install" in plan.next_step
 
 
 def test_a_missing_launcher_is_an_error_that_names_the_way_out(setup: Setup) -> None:

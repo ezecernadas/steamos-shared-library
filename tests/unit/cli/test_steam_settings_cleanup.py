@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from steamshare.adapters.launcher_location import LAUNCHER_PATH
 from steamshare.adapters.steam_cdp import SteamDebuggerUnavailableError
 from steamshare.adapters.steam_client_api import OwnedGames
 from steamshare.cli.shared import CommandError
@@ -92,7 +93,7 @@ def test_a_real_purge_refuses_when_steam_is_not_reachable(tmp_path: Path) -> Non
 
     message = str(raised.value)
     assert "Start Steam" in message
-    assert "sudo ./steamshare uninstall --purge" in message
+    assert f"sudo {LAUNCHER_PATH} uninstall --purge" in message
     assert "--keep-steam-settings" in message
     assert "Nothing was changed" in message
 

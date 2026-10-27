@@ -384,7 +384,7 @@ def _needs_root_message(arguments: argparse.Namespace) -> str:
     command = shlex.join([*SUDO_UNINSTALL_COMMAND.split(), *parts])
     return (
         f"uninstall removes files from {SYSTEM_UNIT_DIRECTORY}, so it needs root. "
-        f"From the repository root, run:\n  {command}\n"
+        f"Run:\n  {command}\n"
         "To see what it would remove first, add --dry-run (no root needed)."
     )
 

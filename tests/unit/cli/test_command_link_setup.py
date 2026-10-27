@@ -5,11 +5,13 @@ read-only check is a flag, and owner changes are recorded instead of made.
 """
 
 import os
+import re
 from pathlib import Path, PurePosixPath
 
 import pytest
 
 from steamshare.adapters.invoking_user import InvokingUser
+from steamshare.adapters.launcher_location import LAUNCHER_PATH
 from steamshare.cli.command_link_setup import (
     CommandLinkPlan,
     CommandLinkSkipped,
@@ -156,7 +158,7 @@ def test_another_file_with_the_name_is_never_replaced(
     assert setup.system_link.read_text() == "#!/bin/sh\necho mine\n"
     assert "skipped" in capsys.readouterr().out
     [step] = notes.next_steps
-    assert str(setup.system_link) in step and "./steamshare" in step
+    assert str(setup.system_link) in step and str(LAUNCHER_PATH) in step
 
 
 # --- Dry run, and failures -----------------------------------------------------
@@ -190,7 +192,7 @@ def test_a_failed_link_says_what_is_already_done_and_what_to_do(setup: Setup) ->
     try:
         if os.access(setup.system_directory, os.W_OK):
             pytest.skip("running as root, which can write anyway")
-        with pytest.raises(InstallError, match="./steamshare"):
+        with pytest.raises(InstallError, match=re.escape(str(LAUNCHER_PATH))):
             setup.apply()
     finally:
         setup.system_directory.chmod(0o700)

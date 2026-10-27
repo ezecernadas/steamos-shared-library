@@ -59,7 +59,7 @@ USER_PATH_STEP = (
 OTHER_FILE_STEP = (
     f"`{INSTALLED_COMMAND}` was not added: {{path}} is another program's file. Rename or "
     f"remove it, then run `{SUDO_INSTALL_COMMAND}` again; until then, run "
-    f"{LAUNCHER_COMMAND} from the repository folder."
+    f"{LAUNCHER_COMMAND}."
 )
 
 
@@ -141,7 +141,7 @@ def apply_command_link(
             raise InstallError(
                 f"Everything else is set up, but linking {link.path} failed: "
                 f"{error.strerror}. Fix the cause and run `{SUDO_INSTALL_COMMAND}` again; "
-                f"until then, run {LAUNCHER_COMMAND} from the repository folder."
+                f"until then, run {LAUNCHER_COMMAND}."
             ) from error
     print(_status_line(link, report))
     print()

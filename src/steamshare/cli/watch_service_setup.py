@@ -133,7 +133,7 @@ def plan_watch_service(
     if not launcher.is_file():
         raise InstallError(
             f"The watch service runs steamshare through {launcher}, which is missing. "
-            f"Run install from a clone of the repository (`{SUDO_INSTALL_COMMAND}`), "
+            "Get steamshare again (see Install in its README) and run its install, "
             f"or add {NO_WATCH_FLAG} to install only the mounts."
         )
     home = Path(user.home)

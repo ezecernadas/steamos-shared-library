@@ -438,6 +438,10 @@ $script:RequiredFileSystem = 'NTFS'
 # An example library path for hints. Any drive letter but the system one works.
 $script:ExampleLibraryPath = 'E:\Games\SteamLibrary'
 
+# `irm <url> | iex` passes no parameters, so hints about -Library also say how
+# to pass it there: run the downloaded text as a script block, with arguments.
+$script:OneLineLibraryHint = 'From the one-line command, run: & ([scriptblock]::Create((irm <url>))) -Library <path>'
+
 # A local path starts with its drive letter, as in E:\Games\SteamLibrary.
 $script:DriveLetterPattern = '^(?<letter>[A-Za-z]):'
 
@@ -471,6 +475,25 @@ function Get-LibraryDriveLetter {
     $null
 }
 
+function Resolve-LibraryPath {
+    <#
+    .SYNOPSIS
+    Makes the -Library path absolute, against the PowerShell location, which
+    [IO.Path]::GetFullPath would not follow. The folder need not exist yet.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)] [string] $Library)
+    try {
+        $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Library)
+    }
+    catch [System.Management.Automation.DriveNotFoundException] {
+        # A drive letter that does not exist: kept as typed, so the checks
+        # report it with a next step instead of an exception.
+        $Library
+    }
+}
+
 function Test-LibraryFolder {
     <#
     .SYNOPSIS
@@ -479,7 +502,7 @@ function Test-LibraryFolder {
     [CmdletBinding()]
     param([Parameter(Mandatory)] [string] $Library)
     $title = 'Library folder exists'
-    $hint = "Pass the folder that contains $script:SteamAppsDirectory, for example: -Library $script:ExampleLibraryPath"
+    $hint = "Pass the folder that contains $script:SteamAppsDirectory, for example: -Library $script:ExampleLibraryPath`n$script:OneLineLibraryHint"
     if (-not (Test-IsFolder -Path $Library)) {
         return New-CheckResult -Title $title -Status $script:StatusFailure `
             -Details @("$Library is not a folder.") -Hint $hint
@@ -769,7 +792,7 @@ function Test-LibraryRegisteredInSteam {
 # Windows itself lives on that partition and Linux shares a separate one.
 
 $script:DetectionTitle = 'Shared library detected'
-$script:LibraryParameterHint = 'Pass the library with -Library <path>.'
+$script:LibraryParameterHint = "Pass the library with -Library <path>.`n$script:OneLineLibraryHint"
 
 function Find-SharedLibraryCandidate {
     <#

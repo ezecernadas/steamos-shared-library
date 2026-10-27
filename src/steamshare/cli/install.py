@@ -329,7 +329,7 @@ def _needs_root_message(arguments: argparse.Namespace) -> str:
     )
     return (
         f"install writes to {SYSTEM_UNIT_DIRECTORY}, so it needs root. "
-        "From the repository root, run:\n"
+        "Run:\n"
         f"  {SUDO_INSTALL_COMMAND} {install_arguments}\n"
         "To see what it would do first, add --dry-run (no root needed)."
     )

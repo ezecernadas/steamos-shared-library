@@ -46,10 +46,7 @@ $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'SteamShare.psm1') -Force
 
 if ($Library) {
-    # A relative path is resolved against the PowerShell location, which
-    # [IO.Path]::GetFullPath would not follow. The folder need not exist yet;
-    # the checks report that.
-    $Library = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Library)
+    $Library = Resolve-LibraryPath -Library $Library
 }
 
 $results = Invoke-SteamShareSetup -Library $Library -ScriptPath $PSCommandPath -Yes:$Yes -WhatIf:$WhatIfPreference

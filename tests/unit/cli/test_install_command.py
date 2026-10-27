@@ -17,6 +17,7 @@ import pytest
 from steamshare.__main__ import build_parser
 from steamshare.adapters.console import Console
 from steamshare.adapters.invoking_user import InvokingUser
+from steamshare.adapters.launcher_location import LAUNCHER_PATH
 from steamshare.cli.install import (
     EXIT_FAILURE,
     EXIT_OK,
@@ -221,7 +222,7 @@ def test_refuses_to_run_without_root_and_explains_how(
     assert exit_code == EXIT_FAILURE
     assert list(system.unit_directory.iterdir()) == []
     error = capsys.readouterr().err
-    assert "sudo ./steamshare install --partition-uuid 1111AAAA2222BBBB" in error
+    assert f"sudo {LAUNCHER_PATH} install --partition-uuid 1111AAAA2222BBBB" in error
     assert "--dry-run" in error
 
 
@@ -509,7 +510,7 @@ def test_without_root_the_hint_repeats_only_the_flags_given(
     install(make_arguments(partition_uuid=None, library_folder=None), system.build())
 
     error = capsys.readouterr().err
-    assert "sudo ./steamshare install --mount-point /mnt/steamlib" in error
+    assert f"sudo {LAUNCHER_PATH} install --mount-point /mnt/steamlib" in error
     assert "--partition-uuid" not in error
 
 
@@ -566,7 +567,7 @@ def test_without_steam_the_mounts_are_installed_and_the_watch_part_says_what_to_
     assert system.user_commands == []
     output = capsys.readouterr().out
     assert "  ! skipped    Steam has never run for player" in output
-    assert "run Steam once as player, then run `sudo ./steamshare install` again" in output
+    assert f"run Steam once as player, then run `sudo {LAUNCHER_PATH} install` again" in output
 
 
 def test_no_watch_installs_only_the_mounts(

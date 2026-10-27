@@ -20,6 +20,7 @@ import pytest
 from steamshare.__main__ import build_parser
 from steamshare.adapters.console import Console
 from steamshare.adapters.invoking_user import InvokingUser
+from steamshare.adapters.launcher_location import LAUNCHER_PATH
 from steamshare.adapters.release_install import RELEASE_MARKER_FILE_NAME
 from steamshare.adapters.steam_cdp import SteamDebuggerUnavailableError
 from steamshare.adapters.steam_client_api import OwnedGames
@@ -570,7 +571,7 @@ def test_a_mount_that_cannot_be_stopped_stops_the_run_before_its_files_go(
     error = capsys.readouterr().err
     assert shlex.join(["systemctl", "disable", "--now", names[2]]) in error
     assert "close Steam" in error
-    assert "sudo ./steamshare uninstall" in error
+    assert f"sudo {LAUNCHER_PATH} uninstall" in error
 
 
 # --- Asking ------------------------------------------------------------------
@@ -586,7 +587,7 @@ def test_refuses_to_run_without_root_and_suggests_a_dry_run(
     assert exit_code == EXIT_FAILURE
     assert len(system.remaining_unit_files()) == 8
     error = capsys.readouterr().err
-    assert "sudo ./steamshare uninstall --yes --remove-debugger-flag" in error
+    assert f"sudo {LAUNCHER_PATH} uninstall --yes --remove-debugger-flag" in error
     assert "--dry-run" in error
 
 
@@ -792,7 +793,7 @@ def test_purge_refuses_before_any_change_when_steam_is_not_reachable(
     assert system.state_file.exists()
     error = capsys.readouterr().err
     assert "Start Steam" in error
-    assert "sudo ./steamshare uninstall --purge" in error
+    assert f"sudo {LAUNCHER_PATH} uninstall --purge" in error
     assert "--keep-steam-settings" in error
 
 

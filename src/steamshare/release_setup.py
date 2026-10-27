@@ -43,7 +43,7 @@ from steamshare.adapters.release_install import (
 )
 from steamshare.adapters.safe_writes import ChangeOwner
 from steamshare.adapters.unit_installer import create_owned_directories
-from steamshare.cli.shared import ROOT_USER_ID, SUDO_INSTALL_COMMAND, CommandError
+from steamshare.cli.shared import ROOT_USER_ID, CommandError
 
 EXIT_OK = 0
 EXIT_FAILURE = 1
@@ -148,8 +148,8 @@ def _place(source: Path, version: str, folder: InstallFolder, *, change_owner: C
         raise ReleaseSetupError(
             f"{error.path} exists and is not a steamshare release install (it has no "
             f"{RELEASE_MARKER_FILE_NAME} file), so it was left alone. If it is a clone of "
-            f"steamshare, run `{SUDO_INSTALL_COMMAND}` from it instead; otherwise move it "
-            "away and run the one-line install again."
+            f"steamshare, run `sudo {error.path / LAUNCHER_FILE_NAME} install` instead; "
+            "otherwise move it away and run the one-line install again."
         ) from error
     except OSError as error:
         raise ReleaseSetupError(

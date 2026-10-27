@@ -24,6 +24,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Protocol
 
+from steamshare.adapters.launcher_location import LAUNCHER_PATH
 from steamshare.adapters.safe_writes import ChangeOwner
 from steamshare.adapters.websocket_client import (
     WebSocketClosedError,
@@ -116,8 +117,8 @@ def find_shared_js_context(steam_root: Path, *, fetch_json: FetchJson = fetch_js
         raise SteamDebuggerUnavailableError(
             f"Steam's debugger is not answering on {DEBUGGER_ADDRESS} ({error}). Either "
             f"Steam is closed, or {remote_debugging_flag_path(steam_root)} is missing, or "
-            "Steam was not restarted after it was created. Run `sudo ./steamshare "
-            "install` from the repository folder to create the file, then restart Steam once."
+            f"Steam was not restarted after it was created. Run `sudo {LAUNCHER_PATH} "
+            "install` to create the file, then restart Steam once."
         ) from error
     for target in targets if isinstance(targets, list) else []:
         if isinstance(target, dict) and target.get(TARGET_TITLE_KEY) == SHARED_JS_CONTEXT_TITLE:

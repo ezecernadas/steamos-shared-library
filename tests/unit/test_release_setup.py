@@ -138,7 +138,7 @@ def test_a_folder_that_is_not_a_release_is_left_alone(
     assert code == 1
     error = capsys.readouterr().err
     assert f"{clone} exists and is not a steamshare release install" in error
-    assert "sudo ./steamshare install" in error
+    assert f"sudo {clone / 'steamshare'} install" in error
     assert machine.started == []
 
 

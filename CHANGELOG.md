@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Error hints name the running launcher by its absolute path instead of `./steamshare` "from the repository root", so they work after a one-line install too.
+- Windows hints about `-Library` say how to pass it with the one-line command, and `-Library` on a drive that does not exist is reported by the checks instead of ending in a PowerShell exception.
+
 ## [0.2.0] - 2026-10-27
 
 One-command installs and a picker for games that keep their Linux build. Still a pre-release: tested on Zorin OS 18 with Windows, not yet on SteamOS.

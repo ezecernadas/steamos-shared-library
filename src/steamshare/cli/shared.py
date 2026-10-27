@@ -7,13 +7,16 @@ another command.
 import argparse
 from pathlib import PurePosixPath
 
+from steamshare.adapters.launcher_location import LAUNCHER_PATH
+
 ROOT_USER_ID = 0
 
 # How hints tell the user to run steamshare. Before install, and under sudo,
-# through the launcher at the repository root, from the repository folder:
-# sudo's PATH may not hold the folder install links it into (~/.local/bin
-# on SteamOS). After install, as a plain command, through that link.
-LAUNCHER_COMMAND = "./steamshare"
+# through the launcher that is running now, by its absolute path: it works
+# from any folder, for a clone and for a one-line install alike, while sudo's
+# PATH may not hold the folder install links it into (~/.local/bin on
+# SteamOS). After install, as a plain command, through that link.
+LAUNCHER_COMMAND = str(LAUNCHER_PATH)
 SUDO_INSTALL_COMMAND = f"sudo {LAUNCHER_COMMAND} install"
 SUDO_UNINSTALL_COMMAND = f"sudo {LAUNCHER_COMMAND} uninstall"
 INSTALLED_COMMAND = "steamshare"

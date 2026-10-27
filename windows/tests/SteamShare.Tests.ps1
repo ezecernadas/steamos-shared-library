@@ -639,6 +639,29 @@ Describe 'New-LibraryDetectionResult' {
         $result.Details | Should -Contain 'F:\SteamLibrary'
         $result.Hint | Should -BeLike '*-Library <path>*'
     }
+
+    It 'tells how to pass -Library to the one-line command, which takes no parameters' {
+        $result = New-LibraryDetectionResult -RegisteredLibraries @('E:\Games\SteamLibrary') `
+            -Candidates @('E:\Games\SteamLibrary') -Selected ''
+
+        $result.Hint | Should -Match ([regex]::Escape('& ([scriptblock]::Create((irm <url>))) -Library <path>'))
+    }
+}
+
+Describe 'Resolve-LibraryPath' {
+    It 'resolves a relative path against the PowerShell location' {
+        Push-Location $TestDrive
+        try {
+            Resolve-LibraryPath -Library 'SteamLibrary' | Should -Be (Join-Path $TestDrive 'SteamLibrary')
+        }
+        finally {
+            Pop-Location
+        }
+    }
+
+    It 'keeps a path on a drive that does not exist, for the checks to report' {
+        Resolve-LibraryPath -Library 'Y:\NoSuchDrive\SteamLibrary' | Should -Be 'Y:\NoSuchDrive\SteamLibrary'
+    }
 }
 
 Describe 'Get-ElevatedCommandLine' {
