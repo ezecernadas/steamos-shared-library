@@ -84,6 +84,14 @@ The design and the experiments behind it are in [docs/PLAN.md](docs/PLAN.md).
 
 ## Install
 
+> **Note:** once this is installed, every game with a native Linux build that you install on Linux downloads its **Windows** build, in any library, not only the shared one. This keeps the shared library usable from Windows.
+>
+> The Windows setup also turns off hibernation and Fast Startup, because both leave the NTFS disk in a state Linux can't safely write to.
+>
+> To use a game's Linux build, close Steam before installing it, then run `./steamshare force-proton --library <path> --keep-native <appid>`.
+>
+> To skip this behavior entirely, install with `--no-watch`.
+
 ### 1. On Windows
 
 From an elevated PowerShell (*Run as administrator*), in the repository folder:
@@ -123,8 +131,6 @@ To see what each partition holds, it mounts it read-only for a moment, which wri
 2. Go to *Settings → Storage*, pick the shared library, and choose *Make default*.
 
 From then on, a click on *Install* puts the game in the shared library and fetches its Windows build.
-
-> **Note:** while `watch` runs, every game with a native Linux build that you install on Linux gets its **Windows** build, in any library, not only the shared one. This keeps the shared library usable from Windows. To use a game's Linux build, opt it out before installing it: close Steam, then run `./steamshare force-proton --library <path> --keep-native <appid>`. To skip this behavior entirely, install with `--no-watch`.
 
 ## Usage
 
