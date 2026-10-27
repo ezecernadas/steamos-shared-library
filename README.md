@@ -124,6 +124,8 @@ To see what each partition holds, it mounts it read-only for a moment, which wri
 
 From then on, a click on *Install* puts the game in the shared library and fetches its Windows build.
 
+> **Note:** while `watch` runs, every game with a native Linux build that you install on Linux gets its **Windows** build, in any library, not only the shared one. This keeps the shared library usable from Windows. To use a game's Linux build, opt it out before installing it: close Steam, then run `./steamshare force-proton --library <path> --keep-native <appid>`. To skip this behavior entirely, install with `--no-watch`.
+
 ## Usage
 
 Everything runs through `./steamshare` in the repository folder:
