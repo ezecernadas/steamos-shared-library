@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-27
+
+One-command installs and a picker for games that keep their Linux build. Still a pre-release: tested on Zorin OS 18 with Windows, not yet on SteamOS.
+
 ### Added
 
 - An "AI assistance" section in the README that says how the project was built.
@@ -47,5 +51,6 @@ First pre-release. Tested end to end on Zorin OS 18 with Windows; not yet valida
   - the Windows script under PowerShell 5.1 and 7;
   - shellcheck, ruff and PSScriptAnalyzer.
 
-[Unreleased]: https://github.com/ezecernadas/steamshare/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ezecernadas/steamshare/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ezecernadas/steamshare/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ezecernadas/steamshare/releases/tag/v0.1.0
