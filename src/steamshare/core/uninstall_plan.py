@@ -18,6 +18,7 @@ The order is what makes it safe:
   stopped.
 - Files are removed only after their units are stopped, and systemd reloads
   afterwards, so it forgets the units it no longer has files for.
+- The `steamshare` command link on PATH goes last; nothing runs through it.
 
 A purge (`--purge`) adds to that, in this order:
 
@@ -188,6 +189,8 @@ class UninstallFacts:
     # What Steam said about steamshare's mappings; None when Steam is not
     # asked (no purge, or --keep-steam-settings).
     mappings: MappingCleanup | UncheckedMappings | None = None
+    # The `steamshare` links install put on PATH, found by what they point at.
+    command_links: tuple[PurePosixPath, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -198,6 +201,8 @@ class UninstallPlan:
     mount_actions: tuple[UninstallAction, ...]
     # For a purge's last section: the ext4 data and Steam's debugger flag.
     purge_actions: tuple[UninstallAction, ...]
+    # For the "Command" section: the `steamshare` links on PATH.
+    command_actions: tuple[UninstallAction, ...]
     # The ext4 folders the bind mounts showed in the library.
     kept_data_folders: tuple[PurePosixPath, ...]
     kept_debugger_flag: PurePosixPath | None
@@ -207,12 +212,13 @@ class UninstallPlan:
 
 
 def nothing_installed(facts: UninstallFacts) -> bool:
-    """Tell whether no steamshare unit is left, so there is nothing to uninstall.
+    """Tell whether nothing install made is left, so there is nothing to uninstall.
 
     The state file and the debugger flag alone do not count: steamshare's
-    other commands make them without installing anything.
+    other commands make them without installing anything. The command link
+    does: only install makes it.
     """
-    return not facts.system_units and facts.watch_unit is None
+    return not facts.system_units and facts.watch_unit is None and not facts.command_links
 
 
 def build_uninstall_plan(facts: UninstallFacts) -> UninstallPlan:
@@ -228,6 +234,7 @@ def build_uninstall_plan(facts: UninstallFacts) -> UninstallPlan:
         ),
         mount_actions=_system_unit_actions(facts.system_units),
         purge_actions=(*_data_actions(facts), *flag_removal) if facts.purge else (),
+        command_actions=tuple(RemoveFile(link) for link in facts.command_links),
         kept_data_folders=() if facts.purge else bind_mount_sources(facts.system_units),
         kept_debugger_flag=None if removes_flag else facts.debugger_flag,
         removed_debugger_flag=facts.debugger_flag if removes_flag else None,

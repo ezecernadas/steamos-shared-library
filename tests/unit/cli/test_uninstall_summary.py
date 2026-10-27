@@ -77,6 +77,16 @@ def test_counts_of_one_are_singular_and_missing_parts_are_left_out() -> None:
     ]
 
 
+def test_the_command_link_is_on_the_remove_side() -> None:
+    found = UninstallFacts(
+        (), WATCH, None, None, False, command_links=(PurePosixPath("/usr/local/bin/steamshare"),)
+    )
+
+    assert remove_values(found, build_uninstall_plan(found)) == [
+        "watch service, 1 backup, the steamshare command"
+    ]
+
+
 def test_the_debugger_flag_is_on_the_remove_side_only_when_asked() -> None:
     kept = facts(watch=WATCH, flag=FLAG)
     removed = facts(watch=WATCH, flag=FLAG, remove_flag=True)

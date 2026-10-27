@@ -24,6 +24,7 @@ from steamshare.core.systemd_units import (
     linux_only_data_paths,
     mount_unit_name,
     quote_exec_argument,
+    read_watch_service_library,
     render_bind_mount,
     render_ntfs3_loader_service,
     render_ntfs_mount,
@@ -241,6 +242,28 @@ def test_a_launcher_path_with_spaces_and_percent_is_quoted_for_systemd() -> None
 
     [exec_start] = [line for line in lines_of(render_watch_service(config)) if "ExecStart=" in line]
     assert exec_start.startswith('ExecStart="/home/player/My Games/100%%/steamshare" watch ')
+
+
+@pytest.mark.parametrize(
+    "library",
+    ["/mnt/steamlib/SteamLibrary", '/mnt/my "games"/100% $HOME\\lib'],
+)
+def test_the_library_is_read_back_from_the_watch_service(library: str) -> None:
+    config = WatchServiceConfig(
+        launcher=PurePosixPath("/home/player/My Games/steamshare"),
+        library=PurePosixPath(library),
+        tool="proton_experimental",
+        steam_root=PurePosixPath("/home/player/.steam/steam"),
+    )
+
+    content = render_watch_service(config).content
+
+    assert read_watch_service_library(content) == PurePosixPath(library)
+
+
+def test_a_watch_service_without_a_library_reads_as_none() -> None:
+    assert read_watch_service_library("[Service]\nExecStart=/x/steamshare watch\n") is None
+    assert read_watch_service_library("[Unit]\n") is None
 
 
 def test_the_watch_service_restarts_on_failure_and_starts_with_the_session() -> None:

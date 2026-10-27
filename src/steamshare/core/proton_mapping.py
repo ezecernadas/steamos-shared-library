@@ -21,7 +21,7 @@ state file, and write the results back.
 
 import copy
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields, replace
 from enum import Enum
 
 from steamshare.core.library_layout import LINUX_TOOL_FOLDER_PREFIXES
@@ -254,6 +254,29 @@ def mark_keep_native(state: SteamshareState, appids: Iterable[str]) -> Steamshar
 
 def allow_proton(state: SteamshareState, appids: Iterable[str]) -> SteamshareState:
     return replace(state, keep_native=state.keep_native - frozenset(appids))
+
+
+# --- Saving a command's changes ------------------------------------------------
+
+
+def apply_state_changes(
+    saved: SteamshareState, *, before: SteamshareState, after: SteamshareState
+) -> SteamshareState:
+    """Apply what a command changed (`before` to `after`) to the state saved since.
+
+    Why: `watch` runs for hours and holds the state it read at the start of a
+    pass, while `keep-native` or `force-proton` may save theirs meanwhile.
+    Writing the whole stale copy back would undo their changes. So each
+    command saves only the appids it added or removed, in every list, on top
+    of what is in the file now; an appid it did not touch keeps the file's value.
+    """
+    merged = {}
+    for state_field in fields(SteamshareState):
+        old: frozenset[str] = getattr(before, state_field.name)
+        new: frozenset[str] = getattr(after, state_field.name)
+        current: frozenset[str] = getattr(saved, state_field.name)
+        merged[state_field.name] = (current - (old - new)) | (new - old)
+    return SteamshareState(**merged)
 
 
 # --- The CompatToolMapping node in config.vdf ----------------------------------

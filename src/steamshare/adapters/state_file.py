@@ -3,15 +3,24 @@
 The state is what lets steamshare tell its own mappings from the user's
 (`managed_mappings`), and remember which apps stay native (`keep_native`).
 Lists are written sorted, so the file only changes when the state does.
+
+Several commands save it, and `watch` runs for hours next to the others. So
+a command never writes back a whole state it read earlier: it saves only
+what it changed (`save_state_changes`), on top of the file as it is now, and
+with the state locked, so two commands saving at once cannot lose either's
+change.
 """
 
+import fcntl
 import json
-from collections.abc import Mapping
+import os
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
 
 from steamshare.adapters.safe_writes import write_file_atomically
 from steamshare.adapters.xdg_directories import user_config_home
-from steamshare.core.proton_mapping import SteamshareState
+from steamshare.core.proton_mapping import SteamshareState, apply_state_changes
 
 # Relative to the user's config folder (see `xdg_directories`).
 STATE_RELATIVE_PATH = Path("steamshare") / "state.json"
@@ -53,10 +62,40 @@ def _read_appids(content: object, key: str) -> frozenset[str]:
     return frozenset(appids)
 
 
-def write_state(path: Path, state: SteamshareState) -> None:
+def save_state_changes(path: Path, *, before: SteamshareState, after: SteamshareState) -> None:
+    """Save what the command changed from `before` to `after`, keeping everything else.
+
+    `before` is the state the command read; anything another command saved
+    since then stays as that command left it (see `apply_state_changes`).
+    """
+    with lock_state(path):
+        saved = read_state(path)
+        merged = apply_state_changes(saved, before=before, after=after)
+        if merged != saved:
+            _write_state(path, merged)
+
+
+@contextmanager
+def lock_state(path: Path) -> Iterator[None]:
+    """Hold the state's lock: an exclusive `flock` on the folder that holds it.
+
+    The folder, not the file, is locked: the file is replaced by a rename on
+    every write, so a lock on it would stay with the old copy, and a separate
+    lock file would keep `uninstall` from removing the folder.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    folder = os.open(path.parent, os.O_RDONLY)
+    try:
+        # Released when the descriptor is closed, even if the command crashes.
+        fcntl.flock(folder, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(folder)
+
+
+def _write_state(path: Path, state: SteamshareState) -> None:
     content = {
         KEEP_NATIVE_KEY: sorted(state.keep_native),
         MANAGED_MAPPINGS_KEY: sorted(state.managed_mappings),
     }
-    path.parent.mkdir(parents=True, exist_ok=True)
     write_file_atomically(path, json.dumps(content, indent=2) + "\n", STATE_FILE_MODE)

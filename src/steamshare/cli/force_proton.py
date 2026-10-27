@@ -19,8 +19,8 @@ from steamshare.adapters.app_manifests import ManifestError, read_library_apps
 from steamshare.adapters.state_file import (
     StateFileError,
     read_state,
+    save_state_changes,
     state_file_path,
-    write_state,
 )
 from steamshare.adapters.steam_config import (
     DEFAULT_STEAM_ROOT,
@@ -218,12 +218,16 @@ def _read_inputs(
     try:
         state = read_state(system.state_path)
     except StateFileError as error:
-        raise ForceProtonError(
-            f"Could not read steamshare's state ({error}). Fix the JSON by hand, or move "
-            "the file away to start over; mappings steamshare made earlier will then "
-            "count as yours."
-        ) from error
+        raise _unreadable_state_error(error) from error
     return apps, config, state
+
+
+def _unreadable_state_error(error: StateFileError) -> ForceProtonError:
+    return ForceProtonError(
+        f"Could not read steamshare's state ({error}). Fix the JSON by hand, or move "
+        "the file away to start over; mappings steamshare made earlier will then "
+        "count as yours."
+    )
 
 
 def _write_changes(
@@ -247,8 +251,12 @@ def _write_changes(
             backup = write_steam_config(config_path, new_config, system.now())
             print(f"Updated {config_path} (backup: {backup})")
         if new_state != old_state:
-            write_state(system.state_path, new_state)
+            # Only this run's changes, in case `watch` saved meanwhile.
+            save_state_changes(system.state_path, before=old_state, after=new_state)
             print(f"Updated {system.state_path}")
+    except StateFileError as error:
+        # Saving reads the state again, and it may have been broken since.
+        raise _unreadable_state_error(error) from error
     except OSError as error:
         raise ForceProtonError(
             f"Could not write {error.filename}: {error.strerror}. Fix the cause and run "

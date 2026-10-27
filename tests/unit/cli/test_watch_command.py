@@ -7,7 +7,7 @@ tests run whole passes, and the wait-and-retry loop, without a real Steam.
 
 import argparse
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 
@@ -62,6 +62,8 @@ class FakeSteam:
         self.reported_after: CompatToolSetting | None = None
         # Games whose details do not arrive after a change.
         self.silent_after_change: set[str] = set()
+        # Runs while Steam applies a batch, as another command saving the state would.
+        self.during_change: Callable[[], None] = lambda: None
 
     @property
     def changes(self) -> list[tuple[str, str]]:
@@ -80,6 +82,7 @@ class FakeSteam:
         self, changes: list[CompatToolChange]
     ) -> dict[str, CompatToolSetting | None]:
         self.batches.append([(change.appid, change.tool) for change in changes])
+        self.during_change()
         return {change.appid: self._reported(change) for change in changes}
 
     def _reported(self, change: CompatToolChange) -> CompatToolSetting | None:
@@ -229,6 +232,15 @@ def test_forgets_a_mapping_the_user_took_over(tmp_path: Path) -> None:
 
     assert setup.steam.changes == []
     assert setup.state()["managed_mappings"] == []
+
+
+def test_a_pass_keeps_what_another_command_saved_while_it_ran(setup: Setup) -> None:
+    # keep-native saves the state after the pass read it, before the pass saves.
+    setup.steam.during_change = lambda: setup.write_state(keep_native=["620"])
+
+    setup.run()
+
+    assert setup.state() == {"keep_native": ["620"], "managed_mappings": ["48000"]}
 
 
 def test_a_second_pass_changes_nothing(tmp_path: Path) -> None:

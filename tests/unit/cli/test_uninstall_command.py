@@ -59,6 +59,9 @@ class FakeSystem:
         self.home = tmp_path / "home"
         self.home.mkdir()
         self.mount_point = tmp_path / "mnt" / "steamlib"
+        # Stands in for /usr/local/bin, where install links `steamshare`.
+        self.command_directory = tmp_path / "usr-local-bin"
+        self.command_directory.mkdir()
         self.is_root = is_root
         self.user = InvokingUser(1000, 1000, "player", PurePosixPath(self.home))
         self.commands: list[list[str]] = []
@@ -84,6 +87,7 @@ class FakeSystem:
             console=Console(ask=self._ask, show=print, is_interactive=self.interactive),
             symbols=UNICODE_SYMBOLS,
             connect_to_steam=self._connect_to_steam,
+            command_directory=self.command_directory,
         )
 
     # --- What install leaves behind ------------------------------------------
@@ -802,9 +806,7 @@ def test_uninstall_removes_everything_install_wrote_except_what_it_keeps(
     system = FakeSystem(tmp_path)
     system.steam_root.mkdir(parents=True)
     system.mount_point.mkdir(parents=True)
-    launcher = tmp_path / "repository" / "steamshare"
-    launcher.parent.mkdir()
-    launcher.write_text("#!/usr/bin/env bash\n")
+    launcher = make_checkout(tmp_path / "repository")
     before = snapshot(tmp_path)
 
     install_exit_code = install_command.install(
@@ -849,9 +851,7 @@ def test_install_then_purge_leaves_nothing_steamshare_wrote(
     for folder in (".config", ".local/share", ".steam/steam"):
         (system.home / folder).mkdir(parents=True)
     system.mount_point.mkdir(parents=True)
-    launcher = tmp_path / "repository" / "steamshare"
-    launcher.parent.mkdir()
-    launcher.write_text("#!/usr/bin/env bash\n")
+    launcher = make_checkout(tmp_path / "repository")
     before = snapshot(tmp_path)
 
     install_command.install(install_arguments(system.mount_point), install_system(system, launcher))
@@ -904,11 +904,87 @@ def install_system(system: FakeSystem, launcher: Path) -> install_command.System
         launcher=launcher,
         run_command=lambda command: None,
         symbols=UNICODE_SYMBOLS,
+        command_directory=system.command_directory,
+        is_read_only=lambda directory: False,
+        change_link_owner=lambda path, user_id, group_id: None,
     )
+
+
+def make_checkout(folder: Path) -> Path:
+    """Return the launcher of a steamshare checkout in `folder`, as uninstall recognizes it."""
+    (folder / "src" / "steamshare").mkdir(parents=True)
+    launcher = folder / "steamshare"
+    launcher.write_text("#!/usr/bin/env bash\n")
+    return launcher
 
 
 def _never_probed(partition: object) -> object:
     raise AssertionError("both install flags are given, so no partition is probed")
+
+
+# --- The steamshare command on PATH -------------------------------------------
+
+
+def test_removes_the_steamshare_link_install_put_on_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = installed_system(tmp_path)
+    link = system.command_directory / "steamshare"
+    link.symlink_to(make_checkout(tmp_path / "repository"))
+
+    assert uninstall(make_arguments(), system.build()) == EXIT_OK
+
+    assert not link.is_symlink()
+    assert f"  ✓ removed   {link}\n" in capsys.readouterr().out
+
+
+def test_removes_the_link_in_the_users_folder_too(tmp_path: Path) -> None:
+    system = installed_system(tmp_path)
+    link = system.home / ".local/bin/steamshare"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(make_checkout(tmp_path / "repository"))
+
+    uninstall(make_arguments(), system.build())
+
+    assert not link.is_symlink()
+    # The folder holds the user's other commands; it stays.
+    assert link.parent.is_dir()
+
+
+def test_a_dry_run_lists_the_link_and_keeps_it(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = installed_system(tmp_path, is_root=False)
+    link = system.command_directory / "steamshare"
+    link.symlink_to(make_checkout(tmp_path / "repository"))
+
+    uninstall(make_arguments(dry_run=True), system.build())
+
+    assert link.is_symlink()
+    assert f"  · would remove   {link}\n" in capsys.readouterr().out
+
+
+def test_a_steamshare_file_that_is_not_our_link_stays(tmp_path: Path) -> None:
+    system = installed_system(tmp_path)
+    other = system.command_directory / "steamshare"
+    other.write_text("#!/bin/sh\n")
+
+    uninstall(make_arguments(), system.build())
+
+    assert other.read_text() == "#!/bin/sh\n"
+
+
+def test_a_link_left_alone_still_counts_as_installed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = FakeSystem(tmp_path)
+    link = system.command_directory / "steamshare"
+    link.symlink_to(make_checkout(tmp_path / "repository"))
+
+    uninstall(make_arguments(), system.build())
+
+    assert not link.is_symlink()
+    assert NOTHING_TO_UNINSTALL not in capsys.readouterr().out
 
 
 def test_purge_and_keep_steam_settings_are_flags_off_by_default() -> None:

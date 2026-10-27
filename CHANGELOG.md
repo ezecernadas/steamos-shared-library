@@ -12,6 +12,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A README FAQ entry on NTFS read performance, with `ntfs3` vs ext4 measurements.
 - A project logo (`assets/logo.svg`) and a social preview image for link previews.
 - A README note that `watch` fetches the Windows build of native games in any library, and how to opt a game out.
+- `steamshare keep-native`: with Steam open, a full-screen checkbox list of the native Linux games steamshare decides about, to choose which ones keep their Linux build. It applies the choice at once: it clears steamshare's Proton mapping of a game newly kept native, and maps an unticked game to Proton again. Its library defaults to the one the watch service uses.
+- `install` puts a `steamshare` command on `PATH`: a link to the launcher in `/usr/local/bin`, or in the user's `~/.local/bin` when the root filesystem is read-only (SteamOS). It never replaces a file that is not its own link, and `uninstall` removes the link.
+
+### Fixed
+
+- `watch` could undo a `keep_native` change saved while one of its passes ran, by writing back the whole state it read at the start of the pass. Every command now saves only the appids it changed, on top of the file as it is, under a lock.
 
 ## [0.1.0] - 2026-10-26
 

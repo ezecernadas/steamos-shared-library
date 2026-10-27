@@ -4,9 +4,10 @@ It settles the partition and library folder (asking, unless flags give them;
 see `install_choices`), writes the units from `core.systemd_units` into
 /etc/systemd/system, creates the ext4 folders they bind-mount, and enables
 the mounts. Then, unless `--no-watch` is given, it sets up the `watch` user
-service for the desktop user who ran sudo (see `watch_service_setup`).
+service for the desktop user who ran sudo (see `watch_service_setup`), and
+last it puts the `steamshare` command on PATH (see `command_link_setup`).
 
-The summary shown before asking to proceed covers both parts. What happens
+The summary shown before asking to proceed covers every part. What happens
 is then reported in one section per part, laid out by `run_report`, and the
 report ends with the backups and the numbered next steps. Every effect on
 the machine goes through `System`, so the wiring below is tested without
@@ -25,6 +26,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 from steamshare.adapters.block_devices import read_ntfs_partitions
+from steamshare.adapters.command_link import SYSTEM_COMMAND_DIRECTORY, is_on_read_only_filesystem
 from steamshare.adapters.console import Console, terminal_console
 from steamshare.adapters.invoking_user import InvokingUser, resolve_invoking_user
 from steamshare.adapters.launcher_location import LAUNCHER_PATH
@@ -42,6 +44,12 @@ from steamshare.adapters.unit_installer import (
     FileAction,
     create_owned_directories,
     install_unit_files,
+)
+from steamshare.cli.command_link_setup import (
+    apply_command_link,
+    command_link_summary_field,
+    plan_command_link,
+    preview_command_link,
 )
 from steamshare.cli.install_choices import (
     Discovery,
@@ -66,7 +74,7 @@ from steamshare.cli.run_report import (
     section_header,
 )
 from steamshare.cli.shared import (
-    LAUNCHER_COMMAND,
+    INSTALLED_COMMAND,
     ROOT_USER_ID,
     SUDO_INSTALL_COMMAND,
     CommandError,
@@ -115,6 +123,13 @@ class System:
     run_command: CommandRunner
     # The report's markers and arrow: Unicode, or ASCII where it cannot show.
     symbols: Symbols
+    # Where the `steamshare` command is linked, unless its filesystem is
+    # read-only; then it goes in the user's ~/.local/bin.
+    command_directory: Path
+    is_read_only: Callable[[Path], bool]
+    # Gives a symlink itself to the user (`os.lchown`); `change_owner` would
+    # follow it to the launcher.
+    change_link_owner: ChangeOwner
 
 
 def add_parser(subcommands: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
@@ -196,6 +211,9 @@ def run(arguments: argparse.Namespace) -> int:
         launcher=LAUNCHER_PATH,
         run_command=run_command,
         symbols=choose_symbols(sys.stdout.encoding, os.environ),
+        command_directory=SYSTEM_COMMAND_DIRECTORY,
+        is_read_only=is_on_read_only_filesystem,
+        change_link_owner=os.lchown,
     )
     return install(arguments, system)
 
@@ -215,8 +233,18 @@ def install(arguments: argparse.Namespace, system: System) -> int:
             steam_root=arguments.steam_root,
             launcher=system.launcher,
         )
+        command_link = plan_command_link(
+            user=system.invoking_user,
+            launcher=system.launcher,
+            system_directory=system.command_directory,
+            is_read_only=system.is_read_only,
+        )
         summary_lines = aligned_fields(
-            [*summary_fields(choices, config.mount_point), watch_summary_field(watch)]
+            [
+                *summary_fields(choices, config.mount_point),
+                watch_summary_field(watch),
+                command_link_summary_field(command_link),
+            ]
         )
         confirm_install(
             [section_header("Summary"), *summary_lines, ""],
@@ -229,6 +257,7 @@ def install(arguments: argparse.Namespace, system: System) -> int:
                 config, choices, units, system, report, show_units=arguments.show_units
             )
             watch_notes = preview_watch_service(watch, report, show_units=arguments.show_units)
+            command_notes = preview_command_link(command_link, report)
         else:
             # One timestamp for the whole run, so every backup it makes shares
             # one suffix and the report can name it once.
@@ -241,7 +270,13 @@ def install(arguments: argparse.Namespace, system: System) -> int:
                 report=report,
                 now=now,
             )
-        notes = combine_notes(mounts_notes, watch_notes, _check_setup_notes(config))
+            command_notes = apply_command_link(
+                command_link,
+                change_owner=system.change_owner,
+                change_link_owner=system.change_link_owner,
+                report=report,
+            )
+        notes = combine_notes(mounts_notes, watch_notes, command_notes, _check_setup_notes(config))
         for line in format_closing(notes, dry_run=arguments.dry_run):
             print(line)
     except (CommandError, PartitionCleanupError) as error:
@@ -387,7 +422,7 @@ def _check_setup_notes(config: InstallConfig) -> ClosingNotes:
     library = shlex.quote(str(_library_path(config)))
     return ClosingNotes(
         next_steps=(
-            f"Check the setup, without sudo:  {LAUNCHER_COMMAND} doctor --library {library}",
+            f"Check the setup, without sudo:  {INSTALLED_COMMAND} doctor --library {library}",
         )
     )
 

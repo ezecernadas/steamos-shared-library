@@ -37,8 +37,8 @@ from typing import Protocol
 from steamshare.adapters.state_file import (
     StateFileError,
     read_state,
+    save_state_changes,
     state_file_path,
-    write_state,
 )
 from steamshare.adapters.steam_cdp import (
     SteamDebuggerError,
@@ -46,16 +46,15 @@ from steamshare.adapters.steam_cdp import (
 )
 from steamshare.adapters.steam_client_api import OwnedGames, connect_to_steam_client
 from steamshare.adapters.steam_config import DEFAULT_STEAM_ROOT
+from steamshare.cli.live_changes import apply_batch, format_game_line
 from steamshare.cli.shared import absolute_path
 from steamshare.core.live_proton_mapping import (
     CompatToolChange,
     CompatToolSetting,
     LiveDecision,
     is_change,
-    is_change_confirmed,
     plan_live_mappings,
     record_decision,
-    requested_change,
 )
 from steamshare.core.proton_mapping import DEFAULT_PROTON_TOOL, MappingAction, SteamshareState
 from steamshare.core.watch_pass_scope import (
@@ -89,25 +88,10 @@ CHANGES_PER_BATCH = 50
 FIRST_RETRY_SECONDS = 5.0
 LONGEST_RETRY_SECONDS = 60.0
 
-APPID_COLUMN_WIDTH = 8
-CHANGE_COLUMN_WIDTH = 11
 DECISION_COLUMN_WIDTH = 29
 
-# How each change reads, before (dry run) and after it happened.
+# How each change reads in a dry run, before it happens.
 PLANNED_CHANGE_LABELS = {MappingAction.MAP: "would map", MappingAction.UNMAP: "would unmap"}
-DONE_CHANGE_LABELS = {MappingAction.MAP: "mapped", MappingAction.UNMAP: "unmapped"}
-
-# Why a change may not take, and what to do about it.
-UNCONFIRMED_CHANGE_HINTS = {
-    MappingAction.MAP: (
-        "Steam falls back to its default for a tool it did not find when it started. "
-        "Check the tool's exact name (such as proton_experimental) and pass it with "
-        "--tool; if the tool was just installed, restart Steam."
-    ),
-    MappingAction.UNMAP: (
-        "Clear the tool by hand in the game's Properties > Compatibility, then run watch again."
-    ),
-}
 
 
 class SteamGameClient(Protocol):
@@ -380,45 +364,14 @@ def split_into_batches(
     return [changes[start : start + batch_size] for start in range(0, len(changes), batch_size)]
 
 
-def apply_batch(
-    batch: Sequence[LiveDecision], state: SteamshareState, steam: SteamGameClient, tool: str
-) -> AppliedChanges:
-    """Ask Steam for the batch's changes; record each one Steam now reports."""
-    requests = {decision.game.appid: requested_change(decision, tool) for decision in batch}
-    reported = steam.specify_compat_tools(list(requests.values()))
-    unconfirmed = set()
-    for decision in batch:
-        appid = decision.game.appid
-        after = reported.get(appid)
-        if after is not None and is_change_confirmed(decision, after, tool):
-            print(format_game_line(DONE_CHANGE_LABELS[decision.action], decision))
-            state = record_decision(state, decision)
-        else:
-            print_unconfirmed_change(decision, requests[appid], after)
-            unconfirmed.add(appid)
-    return AppliedChanges(state, unconfirmed=frozenset(unconfirmed))
-
-
-def print_unconfirmed_change(
-    decision: LiveDecision, requested: CompatToolChange, after: CompatToolSetting | None
-) -> None:
-    if after is None:
-        reported = "did not report its details afterwards"
-    else:
-        reported = f"now reports {after.name or 'no tool'} (priority {after.priority})"
-    print(
-        f"Error: asked Steam to set {decision.game.appid} {decision.game.name} to "
-        f"{requested.tool or 'no tool'}, but it {reported}. "
-        f"{UNCONFIRMED_CHANGE_HINTS[decision.action]}",
-        file=sys.stderr,
-    )
-
-
 def _save_if_changed(
     path: Path, saved: SteamshareState, new_state: SteamshareState
 ) -> SteamshareState:
+    # Only this pass's own changes are saved: `keep-native` may have saved
+    # the file since the pass read it, and that must not be undone. The pass
+    # goes on with its own view; the next one reads the file again.
     if new_state != saved:
-        _write_state(path, new_state)
+        _save_state_changes(path, saved, new_state)
     return new_state
 
 
@@ -426,21 +379,28 @@ def _read_state(path: Path) -> SteamshareState:
     try:
         return read_state(path)
     except StateFileError as error:
-        raise WatchError(
-            f"Could not read steamshare's state ({error}). Fix the JSON by hand, or move "
-            "the file away to start over; mappings steamshare made earlier will then "
-            "count as yours."
-        ) from error
+        raise WatchError(_unreadable_state_message(error)) from error
 
 
-def _write_state(path: Path, state: SteamshareState) -> None:
+def _save_state_changes(path: Path, before: SteamshareState, after: SteamshareState) -> None:
     try:
-        write_state(path, state)
+        save_state_changes(path, before=before, after=after)
+    except StateFileError as error:
+        # Saving reads the file again, and someone may have broken it since.
+        raise WatchError(_unreadable_state_message(error)) from error
     except OSError as error:
         raise WatchError(
             f"Could not write {error.filename}: {error.strerror}. The change in Steam was "
             "made; fix the cause, or steamshare will treat that mapping as yours."
         ) from error
+
+
+def _unreadable_state_message(error: StateFileError) -> str:
+    return (
+        f"Could not read steamshare's state ({error}). Fix the JSON by hand, or move "
+        "the file away to start over; mappings steamshare made earlier will then "
+        "count as yours."
+    )
 
 
 # --- Output --------------------------------------------------------------------
@@ -473,10 +433,3 @@ def print_left_alone(decisions: Sequence[LiveDecision]) -> None:
     for decision in decisions:
         if not is_change(decision):
             print(format_game_line(decision.action.value, decision, DECISION_COLUMN_WIDTH))
-
-
-def format_game_line(
-    label: str, decision: LiveDecision, label_width: int = CHANGE_COLUMN_WIDTH
-) -> str:
-    game = decision.game
-    return f"  {label:<{label_width}} {game.appid:>{APPID_COLUMN_WIDTH}}  {game.name}"

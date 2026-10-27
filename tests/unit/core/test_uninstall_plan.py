@@ -84,6 +84,7 @@ def facts(
     state_file: PurePosixPath | None = None,
     debugger_flag: PurePosixPath | None = None,
     remove_debugger_flag: bool = False,
+    command_links: tuple[PurePosixPath, ...] = (),
 ) -> UninstallFacts:
     return UninstallFacts(
         system_units=system,
@@ -91,6 +92,7 @@ def facts(
         state_file=state_file,
         debugger_flag=debugger_flag,
         remove_debugger_flag=remove_debugger_flag,
+        command_links=command_links,
     )
 
 
@@ -105,6 +107,10 @@ def test_without_any_unit_there_is_nothing_to_uninstall() -> None:
 def test_either_kind_of_unit_alone_is_something_to_uninstall() -> None:
     assert not nothing_installed(facts(watch=watch_unit()))
     assert not nothing_installed(facts(system=system_units()[:1]))
+
+
+def test_the_command_link_alone_is_something_to_uninstall() -> None:
+    assert not nothing_installed(facts(command_links=(COMMAND_LINK,)))
 
 
 # --- Stopping order ----------------------------------------------------------
@@ -243,6 +249,23 @@ def test_a_missing_debugger_flag_is_neither_kept_nor_removed() -> None:
 
 
 # --- Enablement links --------------------------------------------------------
+
+
+# --- The steamshare command --------------------------------------------------
+
+COMMAND_LINK = PurePosixPath("/usr/local/bin/steamshare")
+
+
+def test_the_command_links_are_removed() -> None:
+    user_link = PurePosixPath("/home/player/.local/bin/steamshare")
+
+    plan = build_uninstall_plan(facts(command_links=(COMMAND_LINK, user_link)))
+
+    assert plan.command_actions == (RemoveFile(COMMAND_LINK), RemoveFile(user_link))
+
+
+def test_without_a_command_link_there_is_nothing_to_remove_for_it() -> None:
+    assert build_uninstall_plan(facts(watch=watch_unit())).command_actions == ()
 
 
 def test_the_enablement_link_is_in_the_wants_folder_of_each_wanted_by_target() -> None:

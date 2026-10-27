@@ -7,7 +7,7 @@ so adding a command means adding one module and one line below.
 import argparse
 import sys
 
-from steamshare.cli import doctor, force_proton, install, uninstall, watch
+from steamshare.cli import doctor, force_proton, install, keep_native, uninstall, watch
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,6 +21,7 @@ def build_parser() -> argparse.ArgumentParser:
     uninstall.add_parser(subcommands)
     force_proton.add_parser(subcommands)
     watch.add_parser(subcommands)
+    keep_native.add_parser(subcommands)
     return parser
 
 

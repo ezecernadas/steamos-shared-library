@@ -1,15 +1,18 @@
 """Tests for the file where steamshare remembers its own decisions."""
 
+import fcntl
 import json
+import os
 from pathlib import Path
 
 import pytest
 
 from steamshare.adapters.state_file import (
     StateFileError,
+    lock_state,
     read_state,
+    save_state_changes,
     state_file_path,
-    write_state,
 )
 from steamshare.core.proton_mapping import SteamshareState
 
@@ -36,7 +39,7 @@ def test_writes_sorted_lists_and_reads_them_back(tmp_path: Path) -> None:
         keep_native=frozenset({"570", "400"}), managed_mappings=frozenset({"1005870"})
     )
 
-    write_state(path, state)
+    save_state_changes(path, before=SteamshareState(), after=state)
 
     assert json.loads(path.read_text()) == {
         "keep_native": ["400", "570"],
@@ -59,3 +62,46 @@ def test_a_malformed_state_file_is_reported_with_its_path(tmp_path: Path, conten
 
     with pytest.raises(StateFileError, match=str(path)):
         read_state(path)
+
+
+# --- Several commands saving at once -------------------------------------------
+
+
+def test_saving_keeps_what_another_command_saved_since_it_read(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    read_by_watch = SteamshareState()
+    # keep-native saves while watch is in the middle of a pass.
+    save_state_changes(
+        path, before=SteamshareState(), after=SteamshareState(keep_native=frozenset({"570"}))
+    )
+
+    save_state_changes(
+        path,
+        before=read_by_watch,
+        after=SteamshareState(managed_mappings=frozenset({"48000"})),
+    )
+
+    assert read_state(path) == SteamshareState(
+        keep_native=frozenset({"570"}), managed_mappings=frozenset({"48000"})
+    )
+
+
+def test_saving_no_change_leaves_the_file_alone(tmp_path: Path) -> None:
+    path = tmp_path / "steamshare" / "state.json"
+    unchanged = SteamshareState(keep_native=frozenset({"570"}))
+
+    save_state_changes(path, before=unchanged, after=unchanged)
+
+    assert not path.exists()
+
+
+def test_the_state_is_locked_while_a_command_saves(tmp_path: Path) -> None:
+    path = tmp_path / "steamshare" / "state.json"
+
+    with lock_state(path):
+        other = os.open(path.parent, os.O_RDONLY)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(other)

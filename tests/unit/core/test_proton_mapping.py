@@ -13,6 +13,7 @@ from steamshare.core.proton_mapping import (
     MappingAction,
     SteamshareState,
     allow_proton,
+    apply_state_changes,
     mark_keep_native,
     plan_proton_mappings,
     read_compat_tool_mappings,
@@ -180,6 +181,42 @@ def test_allowing_proton_removes_the_apps_from_keep_native() -> None:
     state = allow_proton(SteamshareState(keep_native=frozenset({"1", "400"})), ["400"])
 
     assert state.keep_native == frozenset({"1"})
+
+
+# --- Merging a command's changes into the saved state --------------------------
+
+
+def state(keep_native: set[str] = frozenset(), managed: set[str] = frozenset()) -> SteamshareState:
+    return SteamshareState(keep_native=frozenset(keep_native), managed_mappings=frozenset(managed))
+
+
+def test_a_commands_changes_are_applied_to_the_state_saved_since() -> None:
+    # watch read {} and mapped 48000; meanwhile keep-native added 570.
+    saved_since = state(keep_native={"570"})
+
+    merged = apply_state_changes(saved_since, before=state(), after=state(managed={"48000"}))
+
+    assert merged == state(keep_native={"570"}, managed={"48000"})
+
+
+def test_an_appid_the_command_did_not_touch_keeps_its_saved_value() -> None:
+    # watch's stale copy still lacks 570 in keep_native; it must not undo that.
+    before = state(managed={"48000"})
+    saved_since = state(keep_native={"570"}, managed={"48000"})
+
+    merged = apply_state_changes(saved_since, before=before, after=before)
+
+    assert merged == saved_since
+
+
+def test_removals_are_applied_too() -> None:
+    before = state(keep_native={"570"}, managed={"48000", "400"})
+    after = state(keep_native=set(), managed={"48000"})
+    saved_since = state(keep_native={"570", "620"}, managed={"48000", "400"})
+
+    merged = apply_state_changes(saved_since, before=before, after=after)
+
+    assert merged == state(keep_native={"620"}, managed={"48000"})
 
 
 # --- The CompatToolMapping node in config.vdf ----------------------------------

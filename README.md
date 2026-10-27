@@ -88,7 +88,7 @@ The design and the experiments behind it are in [docs/PLAN.md](docs/PLAN.md).
 >
 > The Windows setup also turns off hibernation and Fast Startup, because both leave the NTFS disk in a state Linux can't safely write to.
 >
-> To use a game's Linux build, close Steam before installing it, then run `./steamshare force-proton --library <path> --keep-native <appid>`.
+> To use a game's Linux build, run `steamshare keep-native` while Steam is open and tick the game before installing it. With Steam closed, `steamshare force-proton --library <path> --keep-native <appid>` does the same.
 >
 > To skip this behavior entirely, install with `--no-watch`.
 
@@ -125,6 +125,8 @@ Which partition holds the shared library? [2]:
 
 To see what each partition holds, it mounts it read-only for a moment, which writes nothing. Before changing anything it shows a summary to confirm.
 
+`install` also puts a `steamshare` command on your `PATH`: a link to the launcher in `/usr/local/bin`, or in `~/.local/bin` where the root filesystem is read-only, as on SteamOS. From then on, run `steamshare` from any folder. If your shell does not find it in `~/.local/bin`, log out and back in; the report says what else to do. A file named `steamshare` that is not steamshare's link is never replaced.
+
 ### 3. In Steam on Linux
 
 1. Restart Steam once, so it turns on the local debugger that `watch` uses.
@@ -134,21 +136,22 @@ From then on, a click on *Install* puts the game in the shared library and fetch
 
 ## Usage
 
-Everything runs through `./steamshare` in the repository folder:
+After `install`, everything runs as `steamshare` from any folder. Commands that need `sudo` run as `sudo ./steamshare` from the repository folder, since `sudo` does not search `~/.local/bin`:
 
 | Command | What it does |
 |---|---|
-| `sudo ./steamshare install` | Sets up the mounts and the watch service. Safe to run again: it changes only what is out of date, and backs up anything it replaces. |
+| `sudo ./steamshare install` | Sets up the mounts, the watch service and the `steamshare` command. Safe to run again: it changes only what is out of date, and backs up anything it replaces. |
 | `sudo ./steamshare uninstall` | Removes what `install` set up and keeps your data; see [Safety and uninstalling](#safety-and-uninstalling). |
 | `sudo ./steamshare uninstall --purge` | Also deletes the Proton prefixes (and any saves in them) and the Proton choices steamshare made in Steam. Needs Steam open. |
-| `./steamshare doctor --library <path>` | Checks the whole setup and says what to fix. |
-| `./steamshare force-proton --library <path> --keep-native <appid>` | Lets a game use its native Linux build. Windows can no longer run it from the shared library, so such games are better installed in a separate Linux library. |
-| `./steamshare watch --library <path> --once --dry-run` | Shows what the watch service would change right now. |
+| `steamshare doctor --library <path>` | Checks the whole setup and says what to fix. |
+| `steamshare keep-native` | With Steam open, lists your native Linux games and lets you tick the ones that should use their Linux build (Space ticks, `/` or typing filters, Enter saves, `q` cancels). Takes effect at once; unticking a game gives it back to Proton. Windows can no longer run a kept game from the shared library, so such games are better installed in a separate Linux library. |
+| `steamshare force-proton --library <path> --keep-native <appid>` | The same for one game while Steam is closed. |
+| `steamshare watch --library <path> --once --dry-run` | Shows what the watch service would change right now. |
 
 A healthy setup looks like this:
 
 ```text
-$ ./steamshare doctor --library /mnt/steamlib/SteamLibrary
+$ steamshare doctor --library /mnt/steamlib/SteamLibrary
 [ OK ] Library partition is mounted with ntfs3 and windows_names
 [ OK ] compatdata and shadercache are bind-mounted from ext4
 [ OK ] Library folder exists
@@ -178,13 +181,13 @@ The Windows script takes `-Library <path>`, `-Yes`, and `-WhatIf` (a dry run).
 To undo the setup:
 
 ```bash
-./steamshare uninstall --dry-run   # what it would remove and keep; needs no sudo
+steamshare uninstall --dry-run   # what it would remove and keep; needs no sudo
 sudo ./steamshare uninstall
 ```
 
 It finds what `install` set up by the header of the generated files, never by name, shows the plan, and asks before removing anything (the default answer is no; `--yes` skips the question).
 
-- **Removed:** the watch service, the mount units and the `ntfs3` loader (stopped first, the bind mounts before the NTFS mount), the backups `install` made of them, steamshare's state file, and the mount point folder if it is empty.
+- **Removed:** the watch service, the mount units and the `ntfs3` loader (stopped first, the bind mounts before the NTFS mount), the backups `install` made of them, steamshare's state file, the `steamshare` command link, and the mount point folder if it is empty.
 - **Kept:** the Proton prefixes and shader caches in `~/.local/share/steam-shared/` (some games keep their saves there), the Proton choices `watch` made in Steam (undoing them would make Steam re-download native games as their Linux build; change one in the game's *Properties → Compatibility*), this repository, and the files on the NTFS partition.
 - **Steam's debugger flag** is kept too, since other tools such as Decky Loader may use it. Add `--remove-debugger-flag` to delete it.
 
@@ -200,11 +203,11 @@ The Proton choices of installed games stay: clearing them would make Steam re-do
 
 - **Steam must be open,** since its settings live in the running client. A purge checks this before changing anything. Add `--keep-steam-settings` to purge without Steam and leave every Proton choice in place.
 - **It asks you to type `purge`,** not just `y`: the saves in the prefixes cannot be recovered. `--yes` skips the question.
-- `./steamshare uninstall --purge --dry-run` lists every file with its size, and how many Proton choices it would clear.
+- `steamshare uninstall --purge --dry-run` lists every file with its size, and how many Proton choices it would clear.
 
 ## Troubleshooting
 
-Start with `./steamshare doctor --library <path>`. Every failure it reports includes the next step. The most common ones:
+Start with `steamshare doctor --library <path>`. Every failure it reports includes the next step. The most common ones:
 
 | Symptom | Cause and fix |
 |---|---|

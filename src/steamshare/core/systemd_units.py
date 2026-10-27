@@ -21,6 +21,7 @@ adapter writes them. To add a unit kind, write a `render_...` function and
 include its result in `build_units`.
 """
 
+import shlex
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
@@ -30,6 +31,7 @@ from steamshare.core.library_layout import (
     STEAMAPPS_DIRECTORY,
 )
 from steamshare.core.mounts import NTFS3_FILESYSTEM, build_ntfs3_mount_options
+from steamshare.core.unit_file_settings import read_setting
 
 # The comment every generated file starts with, so nobody edits it by hand.
 # Its wording is part of every unit's content: changing it makes the next
@@ -81,6 +83,11 @@ GENERATED_UNIT_SUFFIXES = (MOUNT_UNIT_SUFFIX, SERVICE_UNIT_SUFFIX)
 
 WATCH_SERVICE = "steamshare-watch.service"
 WATCH_COMMAND = "watch"
+LIBRARY_OPTION = "--library"
+# Where the watch service's command line is, read back by
+# `read_watch_service_library`.
+SERVICE_SECTION = "Service"
+EXEC_START_SETTING = "ExecStart"
 # The target a user's systemd reaches when the user logs in.
 USER_DEFAULT_TARGET = "default.target"
 # Wait between restarts after a crash, so a persistent failure does not hit
@@ -291,7 +298,7 @@ def render_watch_service(config: WatchServiceConfig) -> UnitFile:
     command = [
         str(config.launcher),
         WATCH_COMMAND,
-        "--library",
+        LIBRARY_OPTION,
         str(config.library),
         "--tool",
         config.tool,
@@ -326,3 +333,26 @@ def quote_exec_argument(argument: str) -> str:
     # Inside double quotes, systemd reads backslash escapes.
     quoted = escaped.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{quoted}"'
+
+
+def read_watch_service_library(content: str) -> PurePosixPath | None:
+    """Return the `--library` the watch service runs with, or None when it names none.
+
+    Commands the user runs by hand, such as `keep-native`, default to the
+    library install set the service up for. The inverse of
+    `quote_exec_argument`: the double quotes and backslash escapes read as
+    `shlex` reads them, and doubled `%` and `$` are halved.
+    """
+    exec_start = read_setting(content, SERVICE_SECTION, EXEC_START_SETTING)
+    if exec_start is None:
+        return None
+    arguments = [_unescape_exec_argument(argument) for argument in shlex.split(exec_start)]
+    try:
+        library = arguments[arguments.index(LIBRARY_OPTION) + 1]
+    except (ValueError, IndexError):
+        return None
+    return PurePosixPath(library)
+
+
+def _unescape_exec_argument(argument: str) -> str:
+    return argument.replace("%%", "%").replace("$$", "$")

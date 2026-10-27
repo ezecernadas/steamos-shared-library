@@ -9,11 +9,14 @@ from pathlib import PurePosixPath
 
 ROOT_USER_ID = 0
 
-# How hints tell the user to run steamshare: through the launcher at the
-# repository root, from the repository folder, as the README shows.
+# How hints tell the user to run steamshare. Before install, and under sudo,
+# through the launcher at the repository root, from the repository folder:
+# sudo's PATH may not hold the folder install links it into (~/.local/bin
+# on SteamOS). After install, as a plain command, through that link.
 LAUNCHER_COMMAND = "./steamshare"
 SUDO_INSTALL_COMMAND = f"sudo {LAUNCHER_COMMAND} install"
 SUDO_UNINSTALL_COMMAND = f"sudo {LAUNCHER_COMMAND} uninstall"
+INSTALLED_COMMAND = "steamshare"
 
 
 class CommandError(Exception):

@@ -31,6 +31,10 @@ are not installed (`steam_settings_cleanup`). It still keeps the choices of
 installed games, since clearing those would re-download them as Linux
 builds. Its order and why are in `core.uninstall_plan`.
 
+It also removes the `steamshare` command install linked onto PATH, in
+/usr/local/bin or the user's ~/.local/bin, but only a symlink to a steamshare
+launcher (`adapters.command_link`): a file of the same name is the user's.
+
 The user's service manager runs only while the user is logged in. When it
 cannot be reached, the watch service's file is still removed, the system
 part still runs, and the report says what is left to do. Every effect on
@@ -48,6 +52,11 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from steamshare.adapters.command_link import (
+    SYSTEM_COMMAND_DIRECTORY,
+    USER_COMMAND_DIRECTORY_IN_HOME,
+    find_command_links,
+)
 from steamshare.adapters.console import Console, terminal_console
 from steamshare.adapters.folder_contents import folder_size, remove_tree, subfolder_names
 from steamshare.adapters.generated_units import find_generated_unit, find_generated_units
@@ -131,6 +140,7 @@ DRY_RUN_HEADER = "Dry run: nothing is removed and systemctl is not run."
 WATCH_SECTION_TITLE = "Watch service"
 MOUNTS_SECTION_TITLE = "Mounts"
 PURGE_SECTION_TITLE = "Purge"
+COMMAND_SECTION_TITLE = "Command"
 KEPT_SECTION_TITLE = "Kept"
 DONE_HEADLINE = "Done. What was kept, and what you can do with it:"
 DRY_RUN_HEADLINE = "Nothing was changed. After a real uninstall:"
@@ -221,6 +231,8 @@ class System:
     symbols: Symbols
     # Opens the running Steam client, for a purge's Proton choices.
     connect_to_steam: ConnectToSteam
+    # Where install links `steamshare` when it can (see `command_link_setup`).
+    command_directory: Path
 
 
 def add_parser(subcommands: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
@@ -278,6 +290,7 @@ def run(arguments: argparse.Namespace) -> int:
         console=terminal_console(),
         symbols=choose_symbols(sys.stdout.encoding, os.environ),
         connect_to_steam=connect_to_steam_client,
+        command_directory=SYSTEM_COMMAND_DIRECTORY,
     )
     return uninstall(arguments, system)
 
@@ -373,6 +386,13 @@ def _discover(arguments: argparse.Namespace, system: System) -> UninstallFacts:
             debugger_flag=flag if flag.is_file() else None,
             # A purge removes the flag along with everything else.
             remove_debugger_flag=arguments.remove_debugger_flag or arguments.purge,
+            # Either folder: the system one may have become read-only, or
+            # writable, since install chose.
+            command_links=tuple(
+                find_command_links(
+                    [system.command_directory, home / USER_COMMAND_DIRECTORY_IN_HOME]
+                )
+            ),
         )
     except OSError as error:
         raise _look_error(error) from error
@@ -464,6 +484,7 @@ def _sections(plan: UninstallPlan, system: System) -> list[Section]:
         Section(WATCH_SECTION_TITLE, home / USER_UNIT_DIRECTORY_IN_HOME, plan.watch_actions),
         Section(MOUNTS_SECTION_TITLE, system.unit_directory, plan.mount_actions),
         Section(PURGE_SECTION_TITLE, None, plan.purge_actions),
+        Section(COMMAND_SECTION_TITLE, None, plan.command_actions),
     ]
     return [section for section in sections if section.actions]
 

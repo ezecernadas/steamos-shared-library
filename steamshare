@@ -12,7 +12,8 @@
 # the message for an older one live in src/steamshare/python_requirement.py.
 #
 # The repository is found from the script's real location, so a symlink to it
-# (for example in ~/.local/bin) works too. The watch service that `install`
+# works too: install links it as `steamshare` in /usr/local/bin, or in
+# ~/.local/bin where the root filesystem is read-only. The watch service that `install`
 # writes runs this script by its absolute path, so moving the repository means
 # running `sudo ./steamshare install` again.
 set -euo pipefail

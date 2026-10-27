@@ -36,6 +36,7 @@ STATE_ITEM = "steamshare state"
 # Its path is in the dry run; here it only says the folder may go too.
 MOUNT_POINT_ITEM = "the mount point folder (if empty)"
 DEBUGGER_FLAG_ITEM = "Steam debugger flag"
+COMMAND_LINK_ITEM = "the steamshare command"
 PROTON_CHOICES_ITEM = "the Proton choices watch made in Steam"
 REPOSITORY_ITEM = "this repository and the files on the NTFS partition"
 DATA_FOLDERS_ITEM = "Proton prefixes and shader caches ({folders})"
@@ -72,6 +73,7 @@ def remove_values(facts: UninstallFacts, plan: UninstallPlan) -> list[str]:
         *([STATE_ITEM] if facts.state_file is not None else []),
         *([DEBUGGER_FLAG_ITEM] if plan.removed_debugger_flag is not None else []),
         *([MOUNT_POINT_ITEM] if _removes_a_mount_point(plan) else []),
+        *([COMMAND_LINK_ITEM] if plan.command_actions else []),
     ]
     return [", ".join(items), *_purged_data(facts), *cleared_choices(facts.mappings)]
 

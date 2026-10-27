@@ -74,6 +74,10 @@ class FakeSystem:
         self.launcher = tmp_path / "repository" / "steamshare"
         self.launcher.parent.mkdir()
         self.launcher.write_text("#!/usr/bin/env bash\n")
+        # Stands in for /usr/local/bin, where the `steamshare` link goes.
+        self.command_directory = tmp_path / "usr-local-bin"
+        self.command_directory.mkdir()
+        self.command_directory_is_read_only = False
         self.user_commands: list[list[str]] = []
         # Every effect in order, to check that the library folder is created
         # only after the mounts are enabled.
@@ -98,6 +102,9 @@ class FakeSystem:
             launcher=self.launcher,
             run_command=self._run_user_command,
             symbols=UNICODE_SYMBOLS,
+            command_directory=self.command_directory,
+            is_read_only=lambda directory: self.command_directory_is_read_only,
+            change_link_owner=self._change_owner,
         )
 
     @property
@@ -170,7 +177,7 @@ def test_real_run_writes_units_creates_folders_and_enables_the_mounts(
     assert system.enabled == [EXPECTED_UNITS[1:]]
     output = capsys.readouterr().out
     assert "created" in output
-    assert "./steamshare doctor --library /mnt/steamlib/SteamLibrary" in output
+    assert "steamshare doctor --library /mnt/steamlib/SteamLibrary" in output
 
 
 def test_second_run_reports_every_unit_unchanged(
@@ -279,6 +286,7 @@ def test_a_first_install_reports_each_section_once_and_ends_with_the_next_steps(
         "  Mounted at     /mnt/steamlib",
         "  Library        /mnt/steamlib/SteamLibrary",
         "  Watch service  for user player",
+        f"  Command        steamshare, linked at {system.command_directory}/steamshare",
         "",
         f"Mounts  ({system.unit_directory})",
         "  ✓ created    steamshare-ntfs3.service",
@@ -294,12 +302,15 @@ def test_a_first_install_reports_each_section_once_and_ends_with_the_next_steps(
         "  ✓ created    steamshare-watch.service",
         "  ✓ running    for player",
         "",
+        f"Command  ({system.command_directory})",
+        f"  ✓ created    steamshare → {system.launcher}",
+        "",
         "Done. Next steps:",
         "  1. Restart Steam once (Steam → Exit, then start it again) so it turns its debugger "
         "on. Until then, watch waits for it.",
         "  2. In Steam: Settings → Storage → the shared library → Make default, so a click on "
         "Install puts games there and fetches their Windows build.",
-        "  3. Check the setup, without sudo:  ./steamshare doctor --library "
+        "  3. Check the setup, without sudo:  steamshare doctor --library "
         "/mnt/steamlib/SteamLibrary",
         "  Follow watch:  journalctl --user -u steamshare-watch.service -f",
     ]
@@ -355,6 +366,39 @@ def test_a_dry_run_reports_the_same_sections_with_would_verbs(
     closing = output.split("Nothing was changed. After a real install, the next steps are:\n")
     assert closing[1].splitlines()[1].startswith("  2. In Steam: Settings → Storage")
     assert "Done." not in output
+
+
+def test_puts_the_steamshare_command_on_path(tmp_path: Path) -> None:
+    system = FakeSystem(tmp_path)
+
+    assert install(make_arguments(), system.build()) == EXIT_OK
+
+    assert (system.command_directory / "steamshare").readlink() == system.launcher
+
+
+def test_on_a_read_only_root_the_command_goes_in_the_users_folder(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = FakeSystem(tmp_path)
+    system.command_directory_is_read_only = True
+
+    install(make_arguments(), system.build())
+
+    link = system.home / ".local/bin/steamshare"
+    assert link.readlink() == system.launcher
+    assert link in system.owners
+    assert "~/.local/bin" in capsys.readouterr().out.split("Done. Next steps:")[1]
+
+
+def test_a_dry_run_shows_the_command_link_and_creates_none(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = FakeSystem(tmp_path, is_root=False)
+
+    install(make_arguments(dry_run=True), system.build())
+
+    assert not (system.command_directory / "steamshare").is_symlink()
+    assert f"  · would create  steamshare → {system.launcher}" in capsys.readouterr().out
 
 
 # --- Choosing interactively --------------------------------------------------
@@ -489,7 +533,7 @@ def test_with_steam_installed_the_watch_service_is_set_up_after_the_mounts(
     assert (system.steam_root / ".cef-enable-remote-debugging").exists()
     closing = capsys.readouterr().out.split("Done. Next steps:\n")[1].splitlines()
     assert closing[-2] == (
-        "  3. Check the setup, without sudo:  ./steamshare doctor --library "
+        "  3. Check the setup, without sudo:  steamshare doctor --library "
         "/mnt/steamlib/SteamLibrary"
     )
     assert closing[-1] == "  Follow watch:  journalctl --user -u steamshare-watch.service -f"
