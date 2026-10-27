@@ -22,7 +22,11 @@ What it keeps, on purpose:
   build;
 - Steam's debugger flag, unless `--remove-debugger-flag` is given, since
   other tools such as Decky Loader may rely on it;
-- this repository and the files on the NTFS partition.
+- this repository and the files on the NTFS partition. A one-line install
+  (`steamshare.release_setup`) has no repository but a program folder, such
+  as /opt/steamshare; the notes name it and the command that deletes it.
+  Uninstall runs from that folder, so it never deletes it itself: the user
+  does, once the run is over.
 
 `--purge` goes further, for users who want everything gone: it also
 deletes the ext4 Proton prefixes and shader caches, and Steam's debugger
@@ -61,6 +65,8 @@ from steamshare.adapters.console import Console, terminal_console
 from steamshare.adapters.folder_contents import folder_size, remove_tree, subfolder_names
 from steamshare.adapters.generated_units import find_generated_unit, find_generated_units
 from steamshare.adapters.invoking_user import InvokingUser, resolve_invoking_user
+from steamshare.adapters.launcher_location import REPOSITORY_ROOT
+from steamshare.adapters.release_install import is_release_install
 from steamshare.adapters.state_file import state_file_path
 from steamshare.adapters.steam_cdp import remote_debugging_flag_path
 from steamshare.adapters.steam_client_api import connect_to_steam_client
@@ -94,10 +100,10 @@ from steamshare.cli.steam_settings_cleanup import (
     clear_steam_mappings,
 )
 from steamshare.cli.uninstall_summary import (
-    REPOSITORY_ITEM,
     cleared_choices,
     cleared_choices_item,
     kept_choices,
+    kept_program_item,
     summary_lines,
 )
 from steamshare.cli.watch_service_setup import (
@@ -161,9 +167,6 @@ PLANNED_WORD_WIDTH = max(
     len(word) for word in [*(planned for _, planned in ACTION_WORDS), KEPT_WORD]
 )
 
-# The same wording as the summary, so both name the kept item identically.
-KEPT_REPOSITORY = REPOSITORY_ITEM
-
 # A purge deletes saves that cannot be recovered, so it asks for this word
 # typed out, not a y that a reflexive Enter or habit can give.
 PURGE_CONFIRMATION_WORD = "purge"
@@ -191,6 +194,10 @@ REPOSITORY_NOTE = (
     "This repository and the files on the NTFS partition were not touched; delete the "
     "repository folder whenever you like."
 )
+RELEASE_FOLDER_NOTE = (
+    "steamshare's program files stay in {folder}, and the files on the NTFS partition were "
+    "not touched. To delete them:  {command}"
+)
 INSTALLED_CHOICES_NOTE = (
     "The Proton choices of installed games stay in Steam: clearing them would make Steam "
     "re-download those games as their Linux build. To change one game, use its "
@@ -205,10 +212,17 @@ UNCHECKED_CHOICES_NOTE = (
     f"{PURGE_FLAG} needs Steam open, or {KEEP_STEAM_SETTINGS_FLAG} to leave those choices in "
     "Steam."
 )
-PURGE_REMAINS_NOTE = (
+PURGE_REMAINS_REPOSITORY = (
     "What remains is this repository and the games on the shared NTFS partition. Delete the "
-    "repository folder whenever you like. To delete the games too, format the partition from "
-    "Windows (Disk Management); that deletes every game on it."
+    "repository folder whenever you like."
+)
+PURGE_REMAINS_RELEASE_FOLDER = (
+    "What remains is steamshare's program files in {folder} and the games on the shared NTFS "
+    "partition. {games_note} To delete the program files:  {command}"
+)
+PURGE_GAMES_NOTE = (
+    "To delete the games too, format the partition from Windows (Disk Management); that "
+    "deletes every game on it."
 )
 
 
@@ -233,6 +247,8 @@ class System:
     connect_to_steam: ConnectToSteam
     # Where install links `steamshare` when it can (see `command_link_setup`).
     command_directory: Path
+    # The folder of the running steamshare: a clone, or a one-line install's.
+    program_folder: Path
 
 
 def add_parser(subcommands: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
@@ -291,6 +307,7 @@ def run(arguments: argparse.Namespace) -> int:
         symbols=choose_symbols(sys.stdout.encoding, os.environ),
         connect_to_steam=connect_to_steam_client,
         command_directory=SYSTEM_COMMAND_DIRECTORY,
+        program_folder=REPOSITORY_ROOT,
     )
     return uninstall(arguments, system)
 
@@ -392,6 +409,11 @@ def _discover(arguments: argparse.Namespace, system: System) -> UninstallFacts:
                 find_command_links(
                     [system.command_directory, home / USER_COMMAND_DIRECTORY_IN_HOME]
                 )
+            ),
+            release_folder=(
+                PurePosixPath(system.program_folder)
+                if is_release_install(system.program_folder)
+                else None
             ),
         )
     except OSError as error:
@@ -515,7 +537,7 @@ def _kept_subjects(facts: UninstallFacts, plan: UninstallPlan, report: RunReport
         *(report.path(folder) for folder in plan.kept_data_folders),
         *kept_choices(facts),
         *([] if flag is None else [f"{FLAG_FILE_NAME_IN_REPORT} ({report.path(flag)})"]),
-        KEPT_REPOSITORY,
+        kept_program_item(facts, report.home),
     ]
 
 
@@ -783,8 +805,26 @@ def _closing_notes(
         )
     if plan.removed_debugger_flag is not None:
         steps.append(DEBUGGER_FLAG_REMOVED_NOTE.format(arrow=arrow))
-    steps.append(PURGE_REMAINS_NOTE if facts.purge else REPOSITORY_NOTE)
+    steps.append(_program_note(facts, system))
     return ClosingNotes(next_steps=tuple(steps))
+
+
+def _program_note(facts: UninstallFacts, system: System) -> str:
+    """Return the note on steamshare's own files, and how to delete them."""
+    folder = facts.release_folder
+    if folder is None:
+        if facts.purge:
+            return f"{PURGE_REMAINS_REPOSITORY} {PURGE_GAMES_NOTE}"
+        return REPOSITORY_NOTE
+    # A folder in the user's home is theirs (release_setup gives it to them).
+    in_home = folder.is_relative_to(system.invoking_user.home)
+    command = shlex.join([*([] if in_home else ["sudo"]), "rm", "-rf", str(folder)])
+    if facts.purge:
+        # The command comes last, so it can be copied without the sentence after it.
+        return PURGE_REMAINS_RELEASE_FOLDER.format(
+            folder=folder, games_note=PURGE_GAMES_NOTE, command=command
+        )
+    return RELEASE_FOLDER_NOTE.format(folder=folder, command=command)
 
 
 def _choices_notes(facts: UninstallFacts, arrow: str) -> list[str]:

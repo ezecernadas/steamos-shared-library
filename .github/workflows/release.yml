@@ -1,0 +1,39 @@
+# Publishes a release when a vX.Y.Z tag is pushed. See "Releasing" in
+# CONTRIBUTING.md for the steps before the tag.
+#
+# It attaches the two files the one-line installs download (setup.ps1 for
+# `irm | iex`, install.sh for `curl | sudo bash`). install.sh downloads the
+# source archive GitHub generates for the tag, so that is not built here.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build the assets and publish the pre-release
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          python-version: "3.12"
+      # Fails when the tag does not match pyproject.toml's version, or when
+      # CHANGELOG.md has no section for it; writes dist/release-notes.md.
+      - name: Build the release assets
+        run: uv run --no-project python release/build_assets.py --tag "${GITHUB_REF_NAME}"
+      - run: shellcheck dist/install.sh
+      # Every release is a pre-release until 1.0.0 (CHANGELOG.md, top).
+      - name: Publish the pre-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          gh release create "${GITHUB_REF_NAME}"
+          --prerelease
+          --title "${GITHUB_REF_NAME}"
+          --notes-file dist/release-notes.md
+          dist/setup.ps1 dist/install.sh

@@ -651,6 +651,12 @@ Describe 'Get-ElevatedCommandLine' {
         Get-ElevatedCommandLine -ScriptPath 'C:\Tools\steamshare\windows\setup.ps1' -Library '' |
             Should -Be 'powershell -ExecutionPolicy Bypass -File "C:\Tools\steamshare\windows\setup.ps1"'
     }
+
+    It 'asks for the same one-line command again when there is no script file' {
+        # Run through `irm <url> | iex`, the script has no path to repeat.
+        Get-ElevatedCommandLine -ScriptPath '' -Library '' |
+            Should -Be 'the same "irm <url> | iex" line you just ran'
+    }
 }
 
 Describe 'Invoke-SteamShareSetup' {
@@ -716,6 +722,22 @@ Describe 'Invoke-SteamShareSetup' {
         $results[2].Details | Should -Contain 'E:\Games\SteamLibrary'
         Should -Invoke -ModuleName SteamShare Test-IsFolder -ParameterFilter { $Path -eq 'E:\Games\SteamLibrary' }
         $results.Status | Should -Not -Contain 'FAIL'
+    }
+
+    It 'runs without a script path, as under irm | iex' {
+        $results = Invoke-SteamShareSetup -Library 'E:\Games\SteamLibrary' -ScriptPath ''
+
+        $results.Status | Should -Not -Contain 'FAIL'
+    }
+
+    It 'names the one-line command in the hint when not elevated and run without a file' {
+        Mock -ModuleName SteamShare Test-IsElevated { $false }
+        Mock -ModuleName SteamShare Get-RegistryValue { 1 } -ParameterFilter { $Name -in 'HibernateEnabled', 'HiberbootEnabled' }
+
+        $results = Invoke-SteamShareSetup -Library 'E:\Games\SteamLibrary' -ScriptPath ''
+
+        $results[0].Status | Should -Be 'FAIL'
+        $results[0].Hint | Should -BeLike '*irm <url> | iex*'
     }
 
     It 'stops after the detection when it finds no candidate' {

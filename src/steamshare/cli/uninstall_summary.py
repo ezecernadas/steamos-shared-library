@@ -10,7 +10,7 @@ Proton choices it clears in Steam; and what it keeps changes with it.
 
 Pure: it builds strings from what was found and the plan, and prints nothing.
 The Kept section of a dry run uses the same wording for the Proton choices
-(`kept_choices`).
+(`kept_choices`) and for steamshare's own files (`kept_program_item`).
 """
 
 from collections.abc import Sequence
@@ -39,6 +39,8 @@ DEBUGGER_FLAG_ITEM = "Steam debugger flag"
 COMMAND_LINK_ITEM = "the steamshare command"
 PROTON_CHOICES_ITEM = "the Proton choices watch made in Steam"
 REPOSITORY_ITEM = "this repository and the files on the NTFS partition"
+# A one-line install has no repository, but a folder the release was placed in.
+RELEASE_FOLDER_ITEM = "steamshare's program files ({folder}) and the files on the NTFS partition"
 DATA_FOLDERS_ITEM = "Proton prefixes and shader caches ({folders})"
 PURGED_DATA_ITEM = "Proton prefixes and shader caches  {size}, {games}"
 CLEARED_CHOICES_ITEM = "Proton choices of {count} not installed"
@@ -82,7 +84,14 @@ def keep_values(facts: UninstallFacts, plan: UninstallPlan, home: PurePosixPath)
     """Return what stays, one item per line."""
     data = [] if not plan.kept_data_folders else [_data_folders(plan.kept_data_folders, home)]
     flag = [] if plan.kept_debugger_flag is None else [DEBUGGER_FLAG_ITEM]
-    return [*data, *kept_choices(facts), *flag, REPOSITORY_ITEM]
+    return [*data, *kept_choices(facts), *flag, kept_program_item(facts, home)]
+
+
+def kept_program_item(facts: UninstallFacts, home: PurePosixPath) -> str:
+    """Return how the kept steamshare code is named: a clone, or a one-line install's folder."""
+    if facts.release_folder is None:
+        return REPOSITORY_ITEM
+    return RELEASE_FOLDER_ITEM.format(folder=shorten_home(facts.release_folder, home))
 
 
 def kept_choices(facts: UninstallFacts) -> list[str]:

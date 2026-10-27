@@ -27,7 +27,7 @@ jobs:
       - run: uv run ruff format --check .
       # The ubuntu-24.04 image ships shellcheck as an apt package (see
       # actions/runner-images, images/ubuntu/Ubuntu2404-Readme.md).
-      - run: shellcheck steamshare
+      - run: shellcheck steamshare release/install.sh
       - run: uv run pytest
 
   integration:
@@ -56,11 +56,21 @@ jobs:
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          python-version: "3.12"
+      # The single-file setup.ps1 a release attaches, for `irm | iex`;
+      # windows/tests/BuiltSetup.Tests.ps1 runs it.
+      - name: Build the release assets
+        run: uv run --no-project python release/build_assets.py
       - name: Lint with PSScriptAnalyzer
         shell: pwsh
-        # -EnableExit sets the exit code to the number of findings, so any
-        # finding fails the job.
-        run: Invoke-ScriptAnalyzer -Path windows -Recurse -EnableExit
+        # The exit code is the number of findings, so any finding fails the
+        # job. (-EnableExit would exit after the first of the two paths.)
+        run: |
+          $findings = @(Invoke-ScriptAnalyzer -Path windows -Recurse) + @(Invoke-ScriptAnalyzer -Path dist/setup.ps1)
+          $findings | Format-Table -AutoSize
+          exit $findings.Count
       # Users run setup.ps1 with the Windows PowerShell 5.1 that ships with
       # Windows, so the tests prove it works there. The image also ships
       # Pester 3.4, which 5.x syntax does not run on.

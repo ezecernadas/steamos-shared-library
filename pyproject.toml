@@ -1,6 +1,6 @@
 [project]
 name = "steamshare"
-version = "0.1.0"
+version = "0.2.0"
 description = "Share one NTFS Steam library between Windows and Linux on a dual-boot PC"
 readme = "README.md"
 license = "GPL-3.0-or-later"
@@ -20,6 +20,8 @@ packages = ["src/steamshare"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit"]
+# The release build tool is a script, not part of the package.
+pythonpath = ["release"]
 addopts = "-ra"
 
 [tool.ruff]

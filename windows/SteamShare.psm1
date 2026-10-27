@@ -989,6 +989,10 @@ function Find-SharedLibrary {
 
 # --- Setup ---------------------------------------------------------------------
 
+# Run through `irm <url> | iex` there is no script file to name, and no
+# -Library either: the one-line command takes no parameters.
+$script:OneLineCommandAgain = 'the same "irm <url> | iex" line you just ran'
+
 function Get-ElevatedCommandLine {
     <#
     .SYNOPSIS
@@ -997,9 +1001,13 @@ function Get-ElevatedCommandLine {
     [CmdletBinding()]
     [OutputType([string])]
     param(
-        [Parameter(Mandatory)] [string] $ScriptPath,
+        # Empty when the setup runs through `irm | iex`, from no file.
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $ScriptPath,
         [Parameter(Mandatory)] [AllowEmptyString()] [string] $Library
     )
+    if (-not $ScriptPath) {
+        return $script:OneLineCommandAgain
+    }
     # -ExecutionPolicy Bypass because Windows blocks unsigned scripts by default.
     $command = "powershell -ExecutionPolicy Bypass -File `"$ScriptPath`""
     if ($Library) {
@@ -1017,7 +1025,8 @@ function Invoke-SteamShareSetup {
     param(
         # Empty to detect the library among the ones Windows Steam knows.
         [string] $Library = '',
-        [Parameter(Mandatory)] [string] $ScriptPath,
+        # Empty when the setup runs through `irm | iex`, from no file.
+        [Parameter(Mandatory)] [AllowEmptyString()] [string] $ScriptPath,
         # Never ask a question, for scripts.
         [switch] $Yes
     )

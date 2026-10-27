@@ -20,6 +20,7 @@ import pytest
 from steamshare.__main__ import build_parser
 from steamshare.adapters.console import Console
 from steamshare.adapters.invoking_user import InvokingUser
+from steamshare.adapters.release_install import RELEASE_MARKER_FILE_NAME
 from steamshare.adapters.steam_cdp import SteamDebuggerUnavailableError
 from steamshare.adapters.steam_client_api import OwnedGames
 from steamshare.cli import install as install_command
@@ -62,6 +63,9 @@ class FakeSystem:
         # Stands in for /usr/local/bin, where install links `steamshare`.
         self.command_directory = tmp_path / "usr-local-bin"
         self.command_directory.mkdir()
+        # Where the running steamshare is: a clone, unless `mark_as_release` runs.
+        self.program_folder = tmp_path / "steamshare-program"
+        self.program_folder.mkdir()
         self.is_root = is_root
         self.user = InvokingUser(1000, 1000, "player", PurePosixPath(self.home))
         self.commands: list[list[str]] = []
@@ -88,7 +92,12 @@ class FakeSystem:
             symbols=UNICODE_SYMBOLS,
             connect_to_steam=self._connect_to_steam,
             command_directory=self.command_directory,
+            program_folder=self.program_folder,
         )
+
+    def mark_as_release(self) -> None:
+        """Make the running steamshare a one-line install, as release_setup leaves it."""
+        (self.program_folder / RELEASE_MARKER_FILE_NAME).write_text("0.2.0\n")
 
     # --- What install leaves behind ------------------------------------------
 
@@ -315,6 +324,49 @@ def test_a_dry_run_ends_with_what_is_kept_and_how_to_remove_it_by_hand(
     assert "Properties → Compatibility" in closing
     assert "Decky Loader" in closing
     assert "--remove-debugger-flag" in closing
+
+
+def test_a_clone_is_left_for_the_user_to_delete(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = installed_system(tmp_path)
+
+    uninstall(make_arguments(), system.build())
+
+    output = capsys.readouterr().out
+    assert "delete the repository folder whenever you like" in output
+    assert str(system.program_folder) not in output
+
+
+def test_a_one_line_install_says_how_to_delete_its_program_folder(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = installed_system(tmp_path)
+    system.mark_as_release()
+
+    uninstall(make_arguments(), system.build())
+
+    output = capsys.readouterr().out
+    assert f"steamshare's program files ({system.program_folder})" in output
+    assert f"To delete them:  sudo rm -rf {system.program_folder}" in output
+    assert "repository" not in output
+    # Nothing deletes the code that is running; the user does, afterwards.
+    assert system.program_folder.is_dir()
+
+
+def test_a_program_folder_in_the_users_home_is_deleted_without_sudo(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = installed_system(tmp_path)
+    system.program_folder = system.home / ".local/share/steamshare"
+    system.program_folder.mkdir(parents=True)
+    system.mark_as_release()
+
+    uninstall(make_arguments(), system.build())
+
+    output = capsys.readouterr().out
+    assert f"To delete them:  rm -rf {system.program_folder}" in output
+    assert "sudo rm" not in output
 
 
 # --- Running it --------------------------------------------------------------
@@ -637,6 +689,21 @@ def test_purge_removes_the_data_the_flag_and_the_choices_of_games_not_installed(
     assert "  ✓ cleared   Proton choices of 1 game not installed\n" in output
     assert "Proton choices of installed games stay in Steam" in output
     assert "Disk Management" in output
+
+
+def test_a_purge_of_a_one_line_install_also_names_its_program_folder(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    system = purgeable_system(tmp_path)
+    system.mark_as_release()
+
+    uninstall(make_arguments(purge=True), system.build())
+
+    output = capsys.readouterr().out
+    assert f"What remains is steamshare's program files in {system.program_folder}" in output
+    assert f"To delete the program files:  sudo rm -rf {system.program_folder}" in output
+    assert "Disk Management" in output
+    assert system.program_folder.is_dir()
 
 
 def test_purge_stops_watch_before_clearing_and_removes_the_state_after(

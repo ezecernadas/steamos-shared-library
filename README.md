@@ -94,17 +94,25 @@ The design and the experiments behind it are in [docs/PLAN.md](docs/PLAN.md).
 
 ### 1. On Windows
 
-From an elevated PowerShell (*Run as administrator*), in the repository folder:
+From an elevated PowerShell (*Run as administrator*):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File windows\setup.ps1
+irm https://github.com/ezecernadas/steamshare/releases/download/v0.2.0/setup.ps1 | iex
 ```
 
-It asks you to confirm the shared library it found, or to pick one when there are several. Then shut Windows down fully: use *Shut down*, not *Restart*, so the volume is left clean.
+It downloads the setup script of this release and runs it; [read it first](https://github.com/ezecernadas/steamshare/releases/download/v0.2.0/setup.ps1) if you like. It asks you to confirm the shared library it found, or to pick one when there are several. Then shut Windows down fully: use *Shut down*, not *Restart*, so the volume is left clean.
+
+Or, from a downloaded or cloned copy of the repository, in its folder: `powershell -ExecutionPolicy Bypass -File windows\setup.ps1`. That way also takes `-Library <path>`, `-Yes` and `-WhatIf`.
 
 ### 2. On Linux
 
-Download the latest release from the [Releases page](https://github.com/ezecernadas/steamshare/releases) and extract it, or clone the repository to follow the latest changes:
+```bash
+curl -fsSL https://github.com/ezecernadas/steamshare/releases/download/v0.2.0/install.sh | sudo bash
+```
+
+It downloads this release into `/opt/steamshare` (or `~/.local/share/steamshare` where the root filesystem is read-only, as on SteamOS) and runs `steamshare install` from there; [read the script first](https://github.com/ezecernadas/steamshare/releases/download/v0.2.0/install.sh) if you like. Run the same command again to update. Install options go after `bash -s --`, for example `curl -fsSL <url> | sudo bash -s -- --no-watch`.
+
+Or download a release from the [Releases page](https://github.com/ezecernadas/steamshare/releases) and extract it, or clone the repository to follow the latest changes, and run `install` from its folder:
 
 ```bash
 git clone https://github.com/ezecernadas/steamshare
@@ -136,7 +144,7 @@ From then on, a click on *Install* puts the game in the shared library and fetch
 
 ## Usage
 
-After `install`, everything runs as `steamshare` from any folder. Commands that need `sudo` run as `sudo ./steamshare` from the repository folder, since `sudo` does not search `~/.local/bin`:
+After `install`, everything runs as `steamshare` from any folder. Commands that need `sudo` run as `sudo ./steamshare` from the repository folder (after the one-line install, from `/opt/steamshare` or `~/.local/share/steamshare`), since `sudo` does not search `~/.local/bin`:
 
 | Command | What it does |
 |---|---|
@@ -169,7 +177,9 @@ Useful `install` options:
 - `--yes`, `--partition-uuid`, `--library-folder` and `--mount-point` answer the questions in advance, for scripts.
 - `--steam-root` points at a Steam installed elsewhere, such as the Flatpak.
 
-The Windows script takes `-Library <path>`, `-Yes`, and `-WhatIf` (a dry run).
+With the one-line install, pass them after `bash -s --`: `curl -fsSL <url> | sudo bash -s -- --dry-run`. A dry run that way places nothing, so its plan names the temporary folder the release was downloaded to. Without a terminal to ask on, as in a script, pass `--yes` or `--partition-uuid` and `--library-folder`.
+
+Run from a copy of the repository, the Windows script takes `-Library <path>`, `-Yes`, and `-WhatIf` (a dry run). The one-line `irm | iex` takes no parameters and asks instead.
 
 ## Safety and uninstalling
 
@@ -188,7 +198,7 @@ sudo ./steamshare uninstall
 It finds what `install` set up by the header of the generated files, never by name, shows the plan, and asks before removing anything (the default answer is no; `--yes` skips the question).
 
 - **Removed:** the watch service, the mount units and the `ntfs3` loader (stopped first, the bind mounts before the NTFS mount), the backups `install` made of them, steamshare's state file, the `steamshare` command link, and the mount point folder if it is empty.
-- **Kept:** the Proton prefixes and shader caches in `~/.local/share/steam-shared/` (some games keep their saves there), the Proton choices `watch` made in Steam (undoing them would make Steam re-download native games as their Linux build; change one in the game's *Properties → Compatibility*), this repository, and the files on the NTFS partition.
+- **Kept:** the Proton prefixes and shader caches in `~/.local/share/steam-shared/` (some games keep their saves there), the Proton choices `watch` made in Steam (undoing them would make Steam re-download native games as their Linux build; change one in the game's *Properties → Compatibility*), this repository (after the one-line install, its program folder; the report gives the command that deletes it), and the files on the NTFS partition.
 - **Steam's debugger flag** is kept too, since other tools such as Decky Loader may use it. Add `--remove-debugger-flag` to delete it.
 
 To remove everything, saves included, add `--purge`:
@@ -199,7 +209,7 @@ To remove everything, saves included, add `--purge`:
 | Steam's debugger flag | As `--remove-debugger-flag` does |
 | The Proton choices steamshare made for games that are **not** installed | Cleared in the running Steam, right after the watch service stops (so it cannot set them again) and before steamshare's state is deleted |
 
-The Proton choices of installed games stay: clearing them would make Steam re-download those games as their Linux build. What remains after a purge is this repository and the games on the NTFS partition.
+The Proton choices of installed games stay: clearing them would make Steam re-download those games as their Linux build. What remains after a purge is this repository (or the one-line install's program folder) and the games on the NTFS partition.
 
 - **Steam must be open,** since its settings live in the running client. A purge checks this before changing anything. Add `--keep-steam-settings` to purge without Steam and leave every Proton choice in place.
 - **It asks you to type `purge`,** not just `y`: the saves in the prefixes cannot be recovered. `--yes` skips the question.

@@ -191,6 +191,10 @@ class UninstallFacts:
     mappings: MappingCleanup | UncheckedMappings | None = None
     # The `steamshare` links install put on PATH, found by what they point at.
     command_links: tuple[PurePosixPath, ...] = ()
+    # The running steamshare's folder when the one-line install placed it
+    # (`adapters.release_install`); None for a clone. It is only named in the
+    # notes: uninstall never deletes the code it runs from.
+    release_folder: PurePosixPath | None = None
 
 
 @dataclass(frozen=True)

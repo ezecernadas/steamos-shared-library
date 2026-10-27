@@ -54,6 +54,7 @@ No new behavior without a test. A bug fix starts with a test that reproduces the
 
 - `tests/unit/`: pytest, fast, no I/O.
 - `tests/integration/`: real NTFS images on loop devices, root required; runs in CI.
+- `tests/unit/release/`: the release build tool and `release/install.sh`.
 - Shell scripts: `bats`.
 
 ## 5. Safe by default
@@ -96,7 +97,17 @@ Every user-facing error states the cause and the next step. For example:
 
 Never print a bare traceback for an expected failure.
 
-## 8. Commits
+## 8. Releasing
+
+Each release attaches the files the README's one-line installs download: `setup.ps1` for Windows and `install.sh` for Linux. `release/build_assets.py` builds them (`python3 release/build_assets.py` writes them to `dist/`, to inspect or to run the Pester tests that need them).
+
+1. Bump `version` in `pyproject.toml`, run `uv lock`, and change the version in the README's install URLs. A unit test fails until both match.
+2. In `CHANGELOG.md`, move the `[Unreleased]` entries under `## [X.Y.Z] - <date>` and update the links at the bottom.
+3. Commit, then push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`. The release workflow checks that the tag matches `pyproject.toml`, builds the assets, and publishes a pre-release with that CHANGELOG section as its notes.
+
+The README URLs are pinned to the tag because GitHub's `/releases/latest/download/` ignores pre-releases, and every release so far is one. Once the first non-pre-release is published, switch them to `/releases/latest/download/`, drop or adapt the version-match test (`tests/unit/test_readme_install_urls.py`), and drop `--prerelease` from `.github/workflows/release.yml`.
+
+## 9. Commits
 
 - Use [Conventional Commits](https://www.conventionalcommits.org/): `feat:`, `fix:`, `docs:`, `test:`, `refactor:`, `chore:`.
 - Keep commits small, one logical change each. Tests go in the same commit as the code they cover.

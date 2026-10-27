@@ -48,8 +48,11 @@ def facts(
     state_file: PurePosixPath | None = None,
     flag: PurePosixPath | None = None,
     remove_flag: bool = False,
+    release_folder: PurePosixPath | None = None,
 ) -> UninstallFacts:
-    return UninstallFacts(system, watch, state_file, flag, remove_flag)
+    return UninstallFacts(
+        system, watch, state_file, flag, remove_flag, release_folder=release_folder
+    )
 
 
 def test_everything_installed_is_counted_in_one_line() -> None:
@@ -111,6 +114,22 @@ def test_the_data_folders_are_named_by_the_folder_they_share() -> None:
         "the Proton choices watch made in Steam",
         "this repository and the files on the NTFS partition",
     ]
+
+
+def test_a_one_line_install_keeps_its_program_folder_by_name() -> None:
+    found = facts(release_folder=PurePosixPath("/opt/steamshare"))
+
+    assert keep_values(found, build_uninstall_plan(found), HOME)[-1] == (
+        "steamshare's program files (/opt/steamshare) and the files on the NTFS partition"
+    )
+
+
+def test_a_program_folder_in_the_home_is_shown_with_a_tilde() -> None:
+    found = facts(release_folder=HOME / ".local/share/steamshare")
+
+    assert keep_values(found, build_uninstall_plan(found), HOME)[-1] == (
+        "steamshare's program files (~/.local/share/steamshare) and the files on the NTFS partition"
+    )
 
 
 def test_summary_lines_align_the_values_and_end_with_the_dry_run_hint() -> None:

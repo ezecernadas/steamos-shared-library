@@ -14,6 +14,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - A README note that `watch` fetches the Windows build of native games in any library, and how to opt a game out.
 - `steamshare keep-native`: with Steam open, a full-screen checkbox list of the native Linux games steamshare decides about, to choose which ones keep their Linux build. It applies the choice at once: it clears steamshare's Proton mapping of a game newly kept native, and maps an unticked game to Proton again. Its library defaults to the one the watch service uses.
 - `install` puts a `steamshare` command on `PATH`: a link to the launcher in `/usr/local/bin`, or in the user's `~/.local/bin` when the root filesystem is read-only (SteamOS). It never replaces a file that is not its own link, and `uninstall` removes the link.
+- One-command installs, served from the assets of each GitHub release:
+  - Windows: `irm <release>/setup.ps1 | iex` runs a single-file `setup.ps1` with the module embedded. It takes no parameters, so the library is chosen interactively; run that way, it never closes the PowerShell window and leaves no settings behind in it.
+  - Linux: `curl -fsSL <release>/install.sh | sudo bash` downloads the release into `/opt/steamshare` (or `~/.local/share/steamshare` on a read-only root, as on SteamOS) and runs `install` from there. Install options go after `bash -s --`; running it again updates. It only replaces a folder an earlier one-line install placed.
+- `uninstall` names the program folder of a one-line install and the command that deletes it; it never deletes the code it runs from.
+- `release/build_assets.py` builds those assets, and a release workflow publishes them as a pre-release when a `vX.Y.Z` tag is pushed, with the CHANGELOG section as notes.
 
 ### Fixed
 
